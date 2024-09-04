@@ -17,6 +17,7 @@ package me.ag2s.epublib.util.commons.io;
  * limitations under the License.
  */
 
+import io.github.pixee.security.BoundedLineReader;
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.File;
@@ -749,7 +750,7 @@ public class XmlStreamReader extends Reader {
                         xmlProlog.substring(0, firstGT + 1)));
                 final StringBuffer prolog = new StringBuffer();
                 String line;
-                while ((line = bReader.readLine()) != null) {
+                while ((line = BoundedLineReader.readLine(bReader, 5_000_000)) != null) {
                     prolog.append(line);
                 }
                 final Matcher m = ENCODING_PATTERN.matcher(prolog);
