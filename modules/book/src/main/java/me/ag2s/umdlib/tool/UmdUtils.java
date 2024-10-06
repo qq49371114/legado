@@ -9,6 +9,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.security.SecureRandom;
 import java.util.Random;
 import java.util.zip.InflaterInputStream;
 
@@ -139,7 +140,7 @@ public class UmdUtils {
         }
     }
 
-    private static final Random random = new Random();
+    private static final Random random = new SecureRandom();
 
     public static byte[] genRandomBytes(int len) {
         if (len <= 0) {
