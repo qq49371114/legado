@@ -1,6 +1,8 @@
 package me.ag2s.epublib.epub;
 
 import android.util.Log;
+import io.github.pixee.security.HostValidator;
+import io.github.pixee.security.Urls;
 
 import org.xml.sax.EntityResolver;
 import org.xml.sax.InputSource;
@@ -46,7 +48,7 @@ public class EpubProcessorSupport {
                 throws IOException {
             String resourcePath;
             if (systemId.startsWith("http:")) {
-                URL url = new URL(systemId);
+                URL url = Urls.create(systemId, Urls.HTTP_PROTOCOLS, HostValidator.DENY_COMMON_INFRASTRUCTURE_TARGETS);
                 resourcePath = "dtd/" + url.getHost() + url.getPath();
                 previousLocation = resourcePath
                         .substring(0, resourcePath.lastIndexOf('/'));
