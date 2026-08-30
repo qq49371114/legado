@@ -82,7 +82,7 @@ class OpenAiTtsEngine(
             put("voice", voice ?: this@OpenAiTtsEngine.voice)
             put("response_format", format)
             // OpenAI speed: 0.25 ~ 4.0, 默认 1.0
-            val speedStr = String.format("%.2f", speed.coerceIn(0.25, 4.0))
+            val speedStr = String.format("%.2f", speed.coerceIn(0.25f, 4.0f))
             put("speed", speedStr.toDouble())
         }.toString()
 
