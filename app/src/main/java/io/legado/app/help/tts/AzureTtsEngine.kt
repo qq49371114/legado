@@ -37,6 +37,11 @@ class AzureTtsEngine(
 
     private val subscriptionKey: String?
         get() {
+            // 优先读取登录信息（避免把Key明文放在header配置中）
+            httpTTS.getLoginInfoMap()?.let { info ->
+                info["subscriptionKey"]?.takeIf { it.isNotBlank() }?.let { return it }
+                info["Subscription Key"]?.takeIf { it.isNotBlank() }?.let { return it }
+            }
             httpTTS.header?.let { headerStr ->
                 runCatching {
                     val headers = JSONObject(headerStr)
@@ -64,7 +69,15 @@ class AzureTtsEngine(
     ): String {
         val rateStr = "${(speed * 100 - 100).toInt()}%"
         val pitchStr = pitch?.let { "${(it * 100 - 100).toInt()}%" } ?: "+0%"
-        val styleTag = emotion?.let { """<mstts:expressAs style="$it"/>""" } ?: ""
+        val escapedText = text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        val content = if (emotion.isNullOrBlank() || emotion == "neutral") {
+            escapedText
+        } else {
+            """<mstts:express-as style="$emotion">$escapedText</mstts:express-as>"""
+        }
 
         return """
             <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis"
@@ -72,8 +85,7 @@ class AzureTtsEngine(
                    xml:lang="zh-CN">
                 <voice name="$voice">
                     <prosody rate="$rateStr" pitch="$pitchStr">
-                        $styleTag
-                        $text
+                        $content
                     </prosody>
                 </voice>
             </speak>

@@ -1,6 +1,5 @@
 package io.legado.app.model.webBook
 
-import io.legado.app.constant.AppLog
 import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.SearchBook
 import kotlinx.coroutines.*
@@ -53,7 +52,8 @@ object MultiSourceSearcher {
         if (book.name == keyword) s += 10.0
         else if (book.name.contains(keyword)) s += 5.0
         if (!book.author.isNullOrBlank()) s += 1.0
-        if (!book.lastChapter.isNullOrBlank()) s += 1.0
+        // 有最新章节信息加分
+        if (!book.latestChapterTitle.isNullOrBlank()) s += 1.0
         return s
     }
 }

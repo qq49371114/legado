@@ -12,7 +12,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 
 /**
  * OpenAI TTS 引擎
@@ -40,6 +39,11 @@ class OpenAiTtsEngine(
      */
     private val apiKey: String?
         get() {
+            // 优先读取登录信息（避免把Key明文放在header配置中）
+            httpTTS.getLoginInfoMap()?.let { info ->
+                info["apiKey"]?.takeIf { it.isNotBlank() }?.let { return it }
+                info["API Key"]?.takeIf { it.isNotBlank() }?.let { return it }
+            }
             httpTTS.header?.let { headerStr ->
                 runCatching {
                     val headers = JSONObject(headerStr)

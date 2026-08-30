@@ -68,7 +68,7 @@
     "voiceName": "alloy",
     "apiFormat": "mp3",
     "maxCharLimit": 4096,
-    "header": "{\"Content-Type\": \"application/json\"}"
+    "loginUi": [{"name": "apiKey", "type": "password"}]
   },
   {
     "id": -211,
@@ -79,7 +79,7 @@
     "voiceName": "nova",
     "apiFormat": "mp3",
     "maxCharLimit": 4096,
-    "header": "{\"Content-Type\": \"application/json\"}"
+    "loginUi": [{"name": "apiKey", "type": "password"}]
   },
   {
     "id": -220,
@@ -91,7 +91,8 @@
     "streamMode": true,
     "ssmlSupport": true,
     "emotionTags": "[\"cheerful\",\"sad\",\"angry\",\"excited\",\"friendly\"]",
-    "speedRange": "0.5-2.0"
+    "speedRange": "0.5-2.0",
+    "loginUi": [{"name": "subscriptionKey", "type": "password"}]
   },
   {
     "id": -221,
@@ -102,7 +103,8 @@
     "apiFormat": "audio-16khz-128kbitrate-mono-mp3",
     "streamMode": true,
     "ssmlSupport": true,
-    "speedRange": "0.5-2.0"
+    "speedRange": "0.5-2.0",
+    "loginUi": [{"name": "subscriptionKey", "type": "password"}]
   },
   {
     "id": -230,

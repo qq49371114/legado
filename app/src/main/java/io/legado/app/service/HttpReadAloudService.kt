@@ -402,8 +402,18 @@ class HttpReadAloudService : BaseReadAloudService(),
     }
 
     private fun md5SpeakFileName(content: String): String {
+        val tts = ReadAloud.httpTTS
+        // 缓存Key包含引擎类型/模型/音色/格式，避免不同AI音色共用错误缓存
+        val engineKey = listOf(
+            tts?.engineType ?: "http",
+            tts?.url ?: "",
+            tts?.voiceModel ?: "",
+            tts?.voiceName ?: "",
+            tts?.apiFormat ?: "mp3",
+            speechRate.toString()
+        ).joinToString("-|-" )
         return MD5Utils.md5Encode16(textChapter?.title ?: "") + "_" +
-                MD5Utils.md5Encode16("${ReadAloud.httpTTS?.url}-|-$speechRate-|-$content")
+            MD5Utils.md5Encode16("$engineKey-|-$content")
     }
 
     private fun createSilentSound(fileName: String) {
@@ -623,17 +633,15 @@ class HttpReadAloudService : BaseReadAloudService(),
                             }
 
                             // 合成每段音频并拼接
-                            val audioBytes = ByteArray(0)
-                            var pos = 0
+                            val audioBytes = java.io.ByteArrayOutputStream()
                             for (seg in segments) {
                                 val chunk = engine.synthesize(seg, httpTts.voiceName, speed)
-                                audioBytes += chunk
-                                pos += chunk.size
+                                audioBytes.write(chunk)
                             }
 
-                            if (audioBytes.isNotEmpty()) {
+                            if (audioBytes.size() > 0) {
                                 val file = getSpeakFileAsMd5(fileName)
-                                file.outputStream().use { it.write(audioBytes) }
+                                file.outputStream().use { it.write(audioBytes.toByteArray()) }
                             } else {
                                 createSilentSound(fileName)
                             }
@@ -687,30 +695,22 @@ class HttpReadAloudService : BaseReadAloudService(),
                     val tempFile = File(ttsFolderPath, "$fileName.${httpTts.apiFormat}")
 
                     runCatching {
-                        // 流式接收音频块，边写边播放
-                        var firstChunkPlayed = false
+                        // 流式接收音频块并写入临时文件；完成后交给ExoPlayer播放
+                        // 普通FileDataSource不会等待文件追加，不能在首块时就播放，否则容易提前EOF
                         engine.synthesizeStream(speakText, httpTts.voiceName, speed).collect { chunk ->
                             tempFile.appendBytes(chunk)
-
-                            // 首个chunk到达后立即开始播放
-                            if (!firstChunkPlayed && tempFile.length() > 4096) {
-                                firstChunkPlayed = true
-                                val mediaItem = MediaItem.fromUri(Uri.fromFile(tempFile))
-                                launch(Main) {
-                                    exoPlayer.addMediaItem(mediaItem)
-                                    if (!exoPlayer.isPlaying) {
-                                        exoPlayer.prepare()
-                                        exoPlayer.playWhenReady = true
-                                    }
-                                }
-                            }
                         }
 
-                        // 如果流式未产出数据，用同步兜底
-                        if (!firstChunkPlayed && tempFile.exists() && tempFile.length() > 0) {
+                        if (tempFile.exists() && tempFile.length() > 0) {
                             val mediaItem = MediaItem.fromUri(Uri.fromFile(tempFile))
-                            launch(Main) { exoPlayer.addMediaItem(mediaItem) }
-                        } else if (!tempFile.exists() || tempFile.length() == 0L) {
+                            launch(Main) {
+                                exoPlayer.addMediaItem(mediaItem)
+                                if (!exoPlayer.isPlaying) {
+                                    exoPlayer.prepare()
+                                    exoPlayer.playWhenReady = true
+                                }
+                            }
+                        } else {
                             createSilentSound(md5SpeakFileName(speakText))
                         }
                     }.onFailure {

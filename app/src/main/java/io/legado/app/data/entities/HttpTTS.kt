@@ -88,9 +88,26 @@ data class HttpTTS(
                     voiceModel = doc.readString("$.voiceModel"),
                     voiceName = doc.readString("$.voiceName"),
                     apiFormat = doc.readString("$.apiFormat") ?: "mp3",
-                    streamMode = doc.readString("$.streamMode")?.toBoolean() ?: false,
-                    ssmlSupport = doc.readString("$.ssmlSupport")?.toBoolean() ?: false,
-                    maxCharLimit = doc.readLong("$.maxCharLimit")?.toInt() ?: 0,
+                    streamMode = doc.read<Any?>("$.streamMode")?.let {
+                        when (it) {
+                            is Boolean -> it
+                            is Number -> it.toInt() != 0
+                            else -> it.toString().toBoolean()
+                        }
+                    } ?: false,
+                    ssmlSupport = doc.read<Any?>("$.ssmlSupport")?.let {
+                        when (it) {
+                            is Boolean -> it
+                            is Number -> it.toInt() != 0
+                            else -> it.toString().toBoolean()
+                        }
+                    } ?: false,
+                    maxCharLimit = doc.read<Any?>("$.maxCharLimit")?.let {
+                        when (it) {
+                            is Number -> it.toInt()
+                            else -> it.toString().toIntOrNull() ?: 0
+                        }
+                    } ?: 0,
                     speedRange = doc.readString("$.speedRange"),
                     pitchRange = doc.readString("$.pitchRange"),
                     emotionTags = doc.readString("$.emotionTags")
