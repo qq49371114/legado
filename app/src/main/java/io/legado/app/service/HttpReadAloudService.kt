@@ -33,6 +33,8 @@ import io.legado.app.help.config.AppConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.exoplayer.InputStreamDataSource
 import io.legado.app.help.http.okHttpClient
+import io.legado.app.help.tts.AiTtsEngineFactory
+import io.legado.app.help.tts.SmartSegmenter
 import io.legado.app.model.ReadAloud
 import io.legado.app.model.ReadBook
 import io.legado.app.model.analyzeRule.AnalyzeUrl
@@ -117,7 +119,15 @@ class HttpReadAloudService : BaseReadAloudService(),
             ReadBook.readAloud()
         } else {
             super.play()
-            if (AppConfig.streamReadAloudAudio) {
+            val httpTts = ReadAloud.httpTTS
+            // AI TTS 引擎走独立流程
+            if (httpTts != null && AiTtsEngineFactory.isAiEngine(httpTts)) {
+                if (httpTts.streamMode) {
+                    downloadAndPlayAudiosAiStream()
+                } else {
+                    downloadAndPlayAudiosAi()
+                }
+            } else if (AppConfig.streamReadAloudAudio) {
                 downloadAndPlayAudiosStream()
             } else {
                 downloadAndPlayAudios()
@@ -575,6 +585,186 @@ class HttpReadAloudService : BaseReadAloudService(),
     inner class CustomLoadErrorHandlingPolicy : DefaultLoadErrorHandlingPolicy(0) {
         override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
             return C.TIME_UNSET
+        }
+    }
+
+    // ===== AI TTS 引擎合成方法 =====
+
+    /**
+     * AI 引擎同步合成（完整音频后播放）
+     */
+    private fun downloadAndPlayAudiosAi() {
+        exoPlayer.clearMediaItems()
+        downloadTask?.cancel()
+        downloadTask = execute {
+            downloadTaskActiveLock.withLock {
+                ensureActive()
+                val httpTts = ReadAloud.httpTTS ?: throw NoStackTraceException("tts is null")
+                val engine = AiTtsEngineFactory.create(httpTts)
+                val speed = (AppConfig.speechRatePlay + 5) / 10.0f
+                contentList.forEachIndexed { index, content ->
+                    ensureActive()
+                    if (index < nowSpeak) return@forEachIndexed
+
+                    val speakText = content.replace(AppPattern.notReadAloudRegex, "")
+                    if (speakText.isEmpty()) {
+                        createSilentSound(md5SpeakFileName(content))
+                        return@forEachIndexed
+                    }
+
+                    val fileName = md5SpeakFileName(speakText)
+                    if (!hasSpeakFile(fileName)) {
+                        runCatching {
+                            // 超长文本智能分段
+                            val segments = if (httpTts.maxCharLimit > 0 && speakText.length > httpTts.maxCharLimit) {
+                                SmartSegmenter.segment(speakText, httpTts.maxCharLimit)
+                            } else {
+                                listOf(speakText)
+                            }
+
+                            // 合成每段音频并拼接
+                            val audioBytes = ByteArray(0)
+                            var pos = 0
+                            for (seg in segments) {
+                                val chunk = engine.synthesize(seg, httpTts.voiceName, speed)
+                                audioBytes += chunk
+                                pos += chunk.size
+                            }
+
+                            if (audioBytes.isNotEmpty()) {
+                                val file = getSpeakFileAsMd5(fileName)
+                                file.outputStream().use { it.write(audioBytes) }
+                            } else {
+                                createSilentSound(fileName)
+                            }
+                        }.onFailure {
+                            when (it) {
+                                is CancellationException -> Unit
+                                else -> {
+                                    AppLog.put("AI TTS 合成失败: ${it.localizedMessage}", it)
+                                    pauseReadAloud()
+                                }
+                            }
+                            return@execute
+                        }
+                    }
+                    val file = getSpeakFileAsMd5(fileName)
+                    val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
+                    launch(Main) {
+                        exoPlayer.addMediaItem(mediaItem)
+                    }
+                }
+            }
+        }.onError {
+            AppLog.put("AI TTS 朗读出错\n${it.localizedMessage}", it, true)
+        }
+    }
+
+    /**
+     * AI 引擎流式合成（边合成边播放）
+     */
+    private fun downloadAndPlayAudiosAiStream() {
+        exoPlayer.clearMediaItems()
+        downloadTask?.cancel()
+        downloadTask = execute {
+            downloadTaskActiveLock.withLock {
+                ensureActive()
+                val httpTts = ReadAloud.httpTTS ?: throw NoStackTraceException("tts is null")
+                val engine = AiTtsEngineFactory.create(httpTts)
+                val speed = (AppConfig.speechRatePlay + 5) / 10.0f
+
+                contentList.forEachIndexed { index, content ->
+                    ensureActive()
+                    if (index < nowSpeak) return@forEachIndexed
+
+                    val speakText = content.replace(AppPattern.notReadAloudRegex, "")
+                    if (speakText.isEmpty()) {
+                        createSilentSound(md5SpeakFileName(content))
+                        return@forEachIndexed
+                    }
+
+                    val fileName = "ai_stream_${System.currentTimeMillis()}_$index"
+                    val tempFile = File(ttsFolderPath, "$fileName.${httpTts.apiFormat}")
+
+                    runCatching {
+                        // 流式接收音频块，边写边播放
+                        var firstChunkPlayed = false
+                        engine.synthesizeStream(speakText, httpTts.voiceName, speed).collect { chunk ->
+                            tempFile.appendBytes(chunk)
+
+                            // 首个chunk到达后立即开始播放
+                            if (!firstChunkPlayed && tempFile.length() > 4096) {
+                                firstChunkPlayed = true
+                                val mediaItem = MediaItem.fromUri(Uri.fromFile(tempFile))
+                                launch(Main) {
+                                    exoPlayer.addMediaItem(mediaItem)
+                                    if (!exoPlayer.isPlaying) {
+                                        exoPlayer.prepare()
+                                        exoPlayer.playWhenReady = true
+                                    }
+                                }
+                            }
+                        }
+
+                        // 如果流式未产出数据，用同步兜底
+                        if (!firstChunkPlayed && tempFile.exists() && tempFile.length() > 0) {
+                            val mediaItem = MediaItem.fromUri(Uri.fromFile(tempFile))
+                            launch(Main) { exoPlayer.addMediaItem(mediaItem) }
+                        } else if (!tempFile.exists() || tempFile.length() == 0L) {
+                            createSilentSound(md5SpeakFileName(speakText))
+                        }
+                    }.onFailure {
+                        when (it) {
+                            is CancellationException -> Unit
+                            else -> {
+                                AppLog.put("AI TTS 流式合成失败: ${it.localizedMessage}", it)
+                                pauseReadAloud()
+                            }
+                        }
+                        return@execute
+                    }
+                }
+                // 预下载下一章内容
+                preDownloadAudiosAi(engine, httpTts, speed)
+            }
+        }.onError {
+            AppLog.put("AI TTS 流式朗读出错\n${it.localizedMessage}", it, true)
+        }
+    }
+
+    /**
+     * AI 引擎预下载下一章
+     */
+    private suspend fun preDownloadAudiosAi(
+        engine: io.legado.app.help.tts.AiTtsEngine,
+        httpTts: HttpTTS,
+        speed: Float
+    ) {
+        val textChapter = ReadBook.nextTextChapter ?: return
+        val nextContents = textChapter.getNeedReadAloud(0, readAloudByPage, 0, 1)
+            .splitToSequence("\n")
+            .filter { it.isNotEmpty() }
+            .take(5)
+            .toList()
+        nextContents.forEach { content ->
+            coroutineContext.ensureActive()
+            val speakText = content.replace(AppPattern.notReadAloudRegex, "")
+            if (speakText.isEmpty()) {
+                createSilentSound(md5SpeakFileName(content))
+                return@forEach
+            }
+            val fileName = md5SpeakFileName(speakText)
+            if (!hasSpeakFile(fileName)) {
+                runCatching {
+                    val audio = engine.synthesize(speakText, httpTts.voiceName, speed)
+                    if (audio.isNotEmpty()) {
+                        val file = getSpeakFileAsMd5(fileName)
+                        file.outputStream().use { it.write(audio) }
+                    } else {
+                        createSilentSound(fileName)
+                    }
+                }
+            }
         }
     }
 

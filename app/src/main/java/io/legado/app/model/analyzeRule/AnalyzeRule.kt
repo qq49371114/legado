@@ -27,6 +27,7 @@ import org.apache.commons.text.StringEscapeUtils
 import org.jsoup.nodes.Node
 import org.mozilla.javascript.NativeObject
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
 import kotlin.collections.component1
 import kotlin.collections.component2
@@ -61,7 +62,29 @@ class AnalyzeRule(
     private var analyzeByJSoup: AnalyzeByJSoup? = null
     private var analyzeByJSonPath: AnalyzeByJSonPath? = null
 
-    private val stringRuleCache = hashMapOf<String, List<SourceRule>>()
+    private val stringRuleCache = object : LinkedHashMap<String, List<SourceRule>>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<SourceRule>>): Boolean {
+            return size > 200  // LRU缓存，最多200条规则，防止内存泄漏
+        }
+    }
+
+    companion object {
+        private val putPattern = Pattern.compile("@put:(\\{[^}]+?\\})", Pattern.CASE_INSENSITIVE)
+        private val evalPattern =
+            Pattern.compile("@get:\\{[^}]+?\\}|\\{\\{[\\w\\W]*?\\}\\}", Pattern.CASE_INSENSITIVE)
+        private val regexPattern = Pattern.compile("\\$\\d{1,2}")
+
+        // 全局正则Pattern缓存（跨书源复用，避免重复编译）
+        private val patternCache = ConcurrentHashMap<String, Pattern>()
+
+        fun getPattern(regex: String, flags: Int = 0): Pattern {
+            val key = "$regex|$flags"
+            return patternCache.computeIfAbsent(key) { Pattern.compile(regex, flags) }
+        }
+
+        // 规则执行超时（毫秒）
+        private const val RULE_TIMEOUT_MS = 30000L
+    }
 
     private var coroutineContext: CoroutineContext = EmptyCoroutineContext
 
@@ -830,13 +853,6 @@ class AnalyzeRule(
                 WebBook.getBookInfoAwait(bookSource, book)
             }
         }
-    }
-
-    companion object {
-        private val putPattern = Pattern.compile("@put:(\\{[^}]+?\\})", Pattern.CASE_INSENSITIVE)
-        private val evalPattern =
-            Pattern.compile("@get:\\{[^}]+?\\}|\\{\\{[\\w\\W]*?\\}\\}", Pattern.CASE_INSENSITIVE)
-        private val regexPattern = Pattern.compile("\\$\\d{1,2}")
     }
 
 }

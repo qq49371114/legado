@@ -11,6 +11,7 @@ import io.legado.app.utils.readString
 
 /**
  * 在线朗读引擎
+ * 支持 AI TTS 引擎 (Edge/OpenAI/Azure/CosyVoice)
  */
 @Entity(tableName = "httpTTS")
 data class HttpTTS(
@@ -29,7 +30,33 @@ data class HttpTTS(
     override var enabledCookieJar: Boolean? = false,
     var loginCheckJs: String? = null,
     @ColumnInfo(defaultValue = "0")
-    var lastUpdateTime: Long = System.currentTimeMillis()
+    var lastUpdateTime: Long = System.currentTimeMillis(),
+    // ===== AI TTS 扩展字段 =====
+    /** 引擎类型: http(传统) | edge | openai | azure | cosyvoice | elevenlabs */
+    @ColumnInfo(defaultValue = "http")
+    var engineType: String = "http",
+    /** 模型选择: tts-1/tts-1-hd 等 */
+    var voiceModel: String? = null,
+    /** 音色: alloy/echo/zh-CN-XiaoxiaoNeural 等 */
+    var voiceName: String? = null,
+    /** 输出格式: mp3/wav/opus/flac */
+    @ColumnInfo(defaultValue = "mp3")
+    var apiFormat: String = "mp3",
+    /** 是否流式合成（边合成边播放） */
+    @ColumnInfo(defaultValue = "0")
+    var streamMode: Boolean = false,
+    /** 是否支持SSML标记 */
+    @ColumnInfo(defaultValue = "0")
+    var ssmlSupport: Boolean = false,
+    /** 单次合成字符上限(0=不限) */
+    @ColumnInfo(defaultValue = "0")
+    var maxCharLimit: Int = 0,
+    /** 语速范围 */
+    var speedRange: String? = null,
+    /** 音调范围 */
+    var pitchRange: String? = null,
+    /** 情感标签: cheerful/sad/angry/excited 等 (JSON数组) */
+    var emotionTags: String? = null
 ) : BaseSource {
 
     override fun getTag(): String {
@@ -55,7 +82,18 @@ data class HttpTTS(
                     loginUrl = doc.readString("$.loginUrl"),
                     loginUi = if (loginUi is List<*>) GSON.toJson(loginUi) else loginUi?.toString(),
                     header = doc.readString("$.header"),
-                    loginCheckJs = doc.readString("$.loginCheckJs")
+                    loginCheckJs = doc.readString("$.loginCheckJs"),
+                    // AI TTS 扩展字段
+                    engineType = doc.readString("$.engineType") ?: "http",
+                    voiceModel = doc.readString("$.voiceModel"),
+                    voiceName = doc.readString("$.voiceName"),
+                    apiFormat = doc.readString("$.apiFormat") ?: "mp3",
+                    streamMode = doc.readString("$.streamMode")?.toBoolean() ?: false,
+                    ssmlSupport = doc.readString("$.ssmlSupport")?.toBoolean() ?: false,
+                    maxCharLimit = doc.readLong("$.maxCharLimit")?.toInt() ?: 0,
+                    speedRange = doc.readString("$.speedRange"),
+                    pitchRange = doc.readString("$.pitchRange"),
+                    emotionTags = doc.readString("$.emotionTags")
                 )
             }
         }

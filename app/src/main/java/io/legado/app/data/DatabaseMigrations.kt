@@ -20,6 +20,7 @@ object DatabaseMigrations {
             migration_31_32, migration_32_33, migration_33_34, migration_34_35,
             migration_35_36, migration_36_37, migration_37_38, migration_38_39,
             migration_39_40, migration_40_41, migration_41_42, migration_42_43,
+            MIGRATION_71_72
         )
     }
 
@@ -370,5 +371,22 @@ object DatabaseMigrations {
         columnName = "enabledReview"
     )
     class Migration_64_65 : AutoMigrationSpec
+
+    // ===== AI TTS 扩展字段迁移 (71->72) =====
+    @Suppress("ClassName")
+    val MIGRATION_71_72 = object : Migration(71, 72) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN engineType TEXT NOT NULL DEFAULT 'http'")
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN voiceModel TEXT")
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN voiceName TEXT")
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN apiFormat TEXT NOT NULL DEFAULT 'mp3'")
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN streamMode INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN ssmlSupport INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN maxCharLimit INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN speedRange TEXT")
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN pitchRange TEXT")
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN emotionTags TEXT")
+        }
+    }
 
 }
