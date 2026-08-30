@@ -122,7 +122,11 @@ class HttpReadAloudService : BaseReadAloudService(),
             val httpTts = ReadAloud.httpTTS
             // AI TTS 引擎走独立流程
             if (httpTts != null && AiTtsEngineFactory.isAiEngine(httpTts)) {
-                if (httpTts.streamMode) {
+                // Edge-TTS统一走完整音频合成：兼容旧版数据库里streamMode=true的预设，
+                // 避免临时文件扩展名/播放时序导致点击按钮后看起来没有启动。
+                if (httpTts.engineType == io.legado.app.help.tts.AiTtsEngine.TYPE_EDGE) {
+                    downloadAndPlayAudiosAi()
+                } else if (httpTts.streamMode) {
                     downloadAndPlayAudiosAiStream()
                 } else {
                     downloadAndPlayAudiosAi()
@@ -649,7 +653,9 @@ class HttpReadAloudService : BaseReadAloudService(),
                             when (it) {
                                 is CancellationException -> Unit
                                 else -> {
-                                    AppLog.put("AI TTS 合成失败: ${it.localizedMessage}", it)
+                                    val message = "AI TTS 合成失败: ${it.localizedMessage}"
+                                    AppLog.put(message, it)
+                                    toastOnUi(message)
                                     pauseReadAloud()
                                 }
                             }
@@ -662,9 +668,18 @@ class HttpReadAloudService : BaseReadAloudService(),
                         exoPlayer.addMediaItem(mediaItem)
                     }
                 }
+                // 所有段落加入播放列表后立即prepare；onTimelineChanged也会兜底
+                launch(Main) {
+                    if (exoPlayer.mediaItemCount > 0 && exoPlayer.playbackState == Player.STATE_IDLE) {
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = true
+                    }
+                }
             }
         }.onError {
-            AppLog.put("AI TTS 朗读出错\n${it.localizedMessage}", it, true)
+            val message = "AI TTS 朗读出错\n${it.localizedMessage}"
+            AppLog.put(message, it, true)
+            toastOnUi(message)
         }
     }
 

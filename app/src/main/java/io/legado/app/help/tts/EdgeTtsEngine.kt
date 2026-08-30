@@ -14,6 +14,7 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -34,21 +35,37 @@ class EdgeTtsEngine(
     override val maxCharPerRequest: Int = 5000
 
     companion object {
-        // 微软 Edge-TTS WebSocket 端点（免费公开）
+        private const val TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
+        private const val CHROMIUM_FULL_VERSION = "143.0.3650.75"
+        private const val SEC_MS_GEC_VERSION = "1-$CHROMIUM_FULL_VERSION"
         private const val WS_ENDPOINT =
             "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1" +
-                "?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4"
-        private const val WS_ORIGIN = "chrome-extension://jdiccldigfinghifnjbnofpkoeajenbp"
+                "?TrustedClientToken=$TRUSTED_CLIENT_TOKEN"
+        private const val WS_ORIGIN = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"
         private const val WS_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0"
+                "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
+
+        /** 生成微软Edge当前要求的Sec-MS-GEC令牌（按5分钟窗口） */
+        private fun generateSecMsGec(): String {
+            val unixSeconds = System.currentTimeMillis() / 1000L
+            val roundedSeconds = unixSeconds - (unixSeconds % 300L)
+            val windowsEpochSeconds = roundedSeconds + 11644473600L
+            val fileTimeTicks = windowsEpochSeconds * 10_000_000L
+            val input = "$fileTimeTicks$TRUSTED_CLIENT_TOKEN"
+            return MessageDigest.getInstance("SHA-256")
+                .digest(input.toByteArray(Charsets.US_ASCII))
+                .joinToString("") { "%02X".format(it) }
+        }
     }
 
     private val voice: String
         get() = httpTTS.voiceName ?: "zh-CN-XiaoxiaoNeural"
 
     private val outputFormat: String
-        get() = httpTTS.apiFormat.ifBlank { "audio-24khz-48kbitrate-mono-mp3" }
+        get() = httpTTS.apiFormat
+            .takeIf { it.startsWith("audio-") }
+            ?: "audio-24khz-48kbitrate-mono-mp3"
 
     override suspend fun synthesize(
         text: String,
@@ -115,14 +132,26 @@ class EdgeTtsEngine(
             })
         }
 
+        // 必须实际收到音频，避免服务端拒绝后生成空文件却被当作成功
+        val audioReceived = AtomicBoolean(false)
         val connected = AtomicBoolean(false)
         val turnEnded = AtomicBoolean(false)
         val errorHolder = arrayOfNulls<Exception>(1)
 
+        val connectionId = UUID.randomUUID().toString().replace("-", "").uppercase()
+        val websocketUrl = "$WS_ENDPOINT&ConnectionId=$connectionId" +
+            "&Sec-MS-GEC=${generateSecMsGec()}" +
+            "&Sec-MS-GEC-Version=$SEC_MS_GEC_VERSION"
         val request = Request.Builder()
-            .url(WS_ENDPOINT)
+            .url(websocketUrl)
             .header("Origin", WS_ORIGIN)
             .header("User-Agent", WS_UA)
+            .header("Pragma", "no-cache")
+            .header("Cache-Control", "no-cache")
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Accept-Encoding", "gzip, deflate, br, zstd")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Cookie", "muid=${UUID.randomUUID().toString().replace("-", "").uppercase()};")
             .build()
 
         val listener = object : WebSocketListener() {
@@ -130,16 +159,19 @@ class EdgeTtsEngine(
                 connected.set(true)
                 // 1. 发送 speech.config
                 webSocket.send(
-                    "X-RequestId: $requestId\n" +
-                        "Content-Type: application/json; charset=utf-8\n" +
-                        "Path: speech.config\n\n" +
-                        configBody.toString()
+                    "X-Timestamp:${java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC)
+                        .format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)}\r\n" +
+                        "Content-Type:application/json; charset=utf-8\r\n" +
+                        "Path:speech.config\r\n\r\n" +
+                        configBody.toString() + "\r\n"
                 )
                 // 2. 发送 SSML
                 webSocket.send(
-                    "X-RequestId: $requestId\n" +
-                        "Content-Type: application/ssml+xml\n" +
-                        "Path: ssml\n\n" +
+                    "X-RequestId:$requestId\r\n" +
+                        "Content-Type:application/ssml+xml\r\n" +
+                        "X-Timestamp:${java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC)
+                            .format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)}\r\n" +
+                        "Path:ssml\r\n\r\n" +
                         ssml
                 )
             }
@@ -153,7 +185,10 @@ class EdgeTtsEngine(
                 val audioStart = 2 + headerLength
                 if (audioStart >= data.size) return
                 val audioData = data.copyOfRange(audioStart, data.size)
-                if (audioData.isNotEmpty()) onChunk?.invoke(audioData)
+                if (audioData.isNotEmpty()) {
+                    audioReceived.set(true)
+                    onChunk?.invoke(audioData)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -196,6 +231,10 @@ class EdgeTtsEngine(
         if (!turnEnded.get()) {
             webSocket.cancel()
             throw Exception("Edge-TTS 合成超时")
+        }
+        if (!audioReceived.get()) {
+            webSocket.cancel()
+            throw Exception("Edge-TTS 未返回音频，请检查网络或稍后重试")
         }
         webSocket.close(1000, "done")
     }

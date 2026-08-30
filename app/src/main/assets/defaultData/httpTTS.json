@@ -5,8 +5,8 @@
     "url": "",
     "engineType": "edge",
     "voiceName": "zh-CN-XiaoxiaoNeural",
-    "apiFormat": "mp3",
-    "streamMode": true,
+    "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
+    "streamMode": false,
     "speedRange": "0.5-2.0"
   },
   {
@@ -15,8 +15,8 @@
     "url": "",
     "engineType": "edge",
     "voiceName": "zh-CN-YunjianNeural",
-    "apiFormat": "mp3",
-    "streamMode": true,
+    "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
+    "streamMode": false,
     "speedRange": "0.5-2.0"
   },
   {
@@ -25,8 +25,8 @@
     "url": "",
     "engineType": "edge",
     "voiceName": "zh-CN-XiaoyiNeural",
-    "apiFormat": "mp3",
-    "streamMode": true,
+    "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
+    "streamMode": false,
     "speedRange": "0.5-2.0"
   },
   {
@@ -35,8 +35,8 @@
     "url": "",
     "engineType": "edge",
     "voiceName": "zh-CN-YunxiNeural",
-    "apiFormat": "mp3",
-    "streamMode": true,
+    "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
+    "streamMode": false,
     "speedRange": "0.5-2.0"
   },
   {
@@ -45,8 +45,8 @@
     "url": "",
     "engineType": "edge",
     "voiceName": "zh-CN-YunyangNeural",
-    "apiFormat": "mp3",
-    "streamMode": true,
+    "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
+    "streamMode": false,
     "speedRange": "0.5-2.0"
   },
   {
@@ -55,8 +55,8 @@
     "url": "",
     "engineType": "edge",
     "voiceName": "zh-CN-XiaohanNeural",
-    "apiFormat": "mp3",
-    "streamMode": true,
+    "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
+    "streamMode": false,
     "speedRange": "0.5-2.0"
   },
   {
