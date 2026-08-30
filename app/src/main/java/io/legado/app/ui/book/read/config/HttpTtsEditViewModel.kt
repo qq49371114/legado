@@ -15,6 +15,9 @@ import io.legado.app.utils.toastOnUi
 class HttpTtsEditViewModel(app: Application) : BaseViewModel(app) {
 
     var id: Long? = null
+    /** 编辑AI引擎时保留界面未展示的engineType/音色/模型等扩展字段 */
+    var originalHttpTTS: HttpTTS? = null
+        private set
 
     fun initData(arguments: Bundle?, success: (httpTTS: HttpTTS) -> Unit) {
         execute {
@@ -27,8 +30,9 @@ class HttpTtsEditViewModel(app: Application) : BaseViewModel(app) {
             }
             return@execute null
         }.onSuccess {
-            it?.let {
-                success.invoke(it)
+            it?.let { httpTTS ->
+                originalHttpTTS = httpTTS
+                success.invoke(httpTTS)
             }
         }
     }

@@ -123,6 +123,7 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
     }
 
     private fun dataFromView(): HttpTTS {
+        val original = viewModel.originalHttpTTS
         return HttpTTS(
             id = viewModel.id ?: System.currentTimeMillis(),
             name = binding.tvName.text.toString(),
@@ -132,7 +133,21 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
             loginUrl = binding.tvLoginUrl.text?.toString(),
             loginUi = binding.tvLoginUi.text?.toString(),
             loginCheckJs = binding.tvLoginCheckJs.text?.toString(),
-            header = binding.tvHeaders.text?.toString()
+            header = binding.tvHeaders.text?.toString(),
+            // AI扩展字段未显示在旧编辑页，必须原样保留，不能因点击保存而重置为http引擎
+            jsLib = original?.jsLib,
+            enabledCookieJar = original?.enabledCookieJar ?: false,
+            lastUpdateTime = original?.lastUpdateTime ?: System.currentTimeMillis(),
+            engineType = original?.engineType ?: "http",
+            voiceModel = original?.voiceModel,
+            voiceName = original?.voiceName,
+            apiFormat = original?.apiFormat ?: "mp3",
+            streamMode = original?.streamMode ?: false,
+            ssmlSupport = original?.ssmlSupport ?: false,
+            maxCharLimit = original?.maxCharLimit ?: 0,
+            speedRange = original?.speedRange,
+            pitchRange = original?.pitchRange,
+            emotionTags = original?.emotionTags
         )
     }
 
