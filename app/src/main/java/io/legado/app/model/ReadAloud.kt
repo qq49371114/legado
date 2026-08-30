@@ -9,6 +9,7 @@ import io.legado.app.constant.IntentAction
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.HttpTTS
 import io.legado.app.help.config.AppConfig
+import io.legado.app.help.tts.AiTtsEngineFactory
 import io.legado.app.service.BaseReadAloudService
 import io.legado.app.service.HttpReadAloudService
 import io.legado.app.service.TTSReadAloudService
@@ -30,8 +31,13 @@ object ReadAloud {
             return TTSReadAloudService::class.java
         }
         if (StringUtils.isNumeric(ttsEngine)) {
-            httpTTS = appDb.httpTTSDao.get(ttsEngine.toLong())
-            if (httpTTS != null) {
+            appDb.httpTTSDao.get(ttsEngine.toLong())?.let { stored ->
+                val normalized = AiTtsEngineFactory.normalizePreset(stored)
+                if (normalized != stored) {
+                    // 立即写回数据库，编辑页也会显示正确AI字段
+                    appDb.httpTTSDao.insert(normalized)
+                }
+                httpTTS = normalized
                 return HttpReadAloudService::class.java
             }
         }

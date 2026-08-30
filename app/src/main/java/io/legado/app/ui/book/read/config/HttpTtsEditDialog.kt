@@ -79,6 +79,11 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
         binding.tvName.setText(httpTTS.name)
         binding.tvUrl.setText(httpTTS.url)
         binding.tvContentType.setText(httpTTS.contentType)
+        binding.tvEngineType.setText(httpTTS.engineType)
+        binding.tvVoiceModel.setText(httpTTS.voiceModel)
+        binding.tvVoiceName.setText(httpTTS.voiceName)
+        binding.tvApiFormat.setText(httpTTS.apiFormat)
+        binding.swStreamMode.isChecked = httpTTS.streamMode
         binding.tvConcurrentRate.setText(httpTTS.concurrentRate)
         binding.tvLoginUrl.setText(httpTTS.loginUrl)
         binding.tvLoginUi.setText(httpTTS.loginUi)
@@ -138,11 +143,11 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
             jsLib = original?.jsLib,
             enabledCookieJar = original?.enabledCookieJar ?: false,
             lastUpdateTime = original?.lastUpdateTime ?: System.currentTimeMillis(),
-            engineType = original?.engineType ?: "http",
-            voiceModel = original?.voiceModel,
-            voiceName = original?.voiceName,
-            apiFormat = original?.apiFormat ?: "mp3",
-            streamMode = original?.streamMode ?: false,
+            engineType = binding.tvEngineType.text?.toString()?.trim().orEmpty().ifBlank { "http" },
+            voiceModel = binding.tvVoiceModel.text?.toString()?.trim()?.ifBlank { null },
+            voiceName = binding.tvVoiceName.text?.toString()?.trim()?.ifBlank { null },
+            apiFormat = binding.tvApiFormat.text?.toString()?.trim().orEmpty().ifBlank { "mp3" },
+            streamMode = binding.swStreamMode.isChecked,
             ssmlSupport = original?.ssmlSupport ?: false,
             maxCharLimit = original?.maxCharLimit ?: 0,
             speedRange = original?.speedRange,

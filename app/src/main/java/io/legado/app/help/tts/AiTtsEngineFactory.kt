@@ -43,20 +43,50 @@ object AiTtsEngineFactory {
         )
     }
 
-    fun create(httpTTS: HttpTTS): AiTtsEngine {
-        val engineType = httpTTS.engineType.ifBlank { AiTtsEngine.TYPE_HTTP }
-        return when (engineType) {
-            AiTtsEngine.TYPE_EDGE -> EdgeTtsEngine(httpTTS)
-            AiTtsEngine.TYPE_OPENAI -> OpenAiTtsEngine(httpTTS)
-            AiTtsEngine.TYPE_AZURE -> AzureTtsEngine(httpTTS)
-            AiTtsEngine.TYPE_COSYVOICE -> CosyVoiceTtsEngine(httpTTS)
-            else -> EdgeTtsEngine(httpTTS) // 默认用 Edge（免费）
+    /**
+     * 修复预设AI引擎：即使旧版本已把隐藏字段保存坏，也能按固定ID恢复。
+     * 返回可直接写回数据库的完整对象。
+     */
+    fun normalizePreset(httpTTS: HttpTTS): HttpTTS {
+        val edgeVoice = when (httpTTS.id) {
+            -200L -> "zh-CN-XiaoxiaoNeural"
+            -201L -> "zh-CN-YunjianNeural"
+            -202L -> "zh-CN-XiaoyiNeural"
+            -203L -> "zh-CN-YunxiNeural"
+            -204L -> "zh-CN-YunyangNeural"
+            -205L -> "zh-CN-XiaohanNeural"
+            else -> null
+        }
+        return if (edgeVoice != null) {
+            httpTTS.copy(
+                engineType = AiTtsEngine.TYPE_EDGE,
+                voiceName = edgeVoice,
+                apiFormat = "audio-24khz-48kbitrate-mono-mp3",
+                streamMode = false,
+                ssmlSupport = true,
+                maxCharLimit = 5000
+            )
+        } else {
+            httpTTS
         }
     }
 
-    /** 判断是否为 AI 引擎（非传统 HTTP TTS） */
+    fun create(httpTTS: HttpTTS): AiTtsEngine {
+        val normalized = normalizePreset(httpTTS)
+        val engineType = normalized.engineType.ifBlank { AiTtsEngine.TYPE_HTTP }
+        return when (engineType) {
+            AiTtsEngine.TYPE_EDGE -> EdgeTtsEngine(normalized)
+            AiTtsEngine.TYPE_OPENAI -> OpenAiTtsEngine(normalized)
+            AiTtsEngine.TYPE_AZURE -> AzureTtsEngine(normalized)
+            AiTtsEngine.TYPE_COSYVOICE -> CosyVoiceTtsEngine(normalized)
+            else -> EdgeTtsEngine(normalized)
+        }
+    }
+
+    /** 判断是否为 AI 引擎（预设ID即使字段被旧版破坏，也仍识别为AI） */
     fun isAiEngine(httpTTS: HttpTTS): Boolean {
-        val type = httpTTS.engineType.ifBlank { AiTtsEngine.TYPE_HTTP }
+        val normalized = normalizePreset(httpTTS)
+        val type = normalized.engineType.ifBlank { AiTtsEngine.TYPE_HTTP }
         return type != AiTtsEngine.TYPE_HTTP
     }
 
