@@ -409,6 +409,7 @@ class HttpReadAloudService : BaseReadAloudService(),
         val tts = ReadAloud.httpTTS
         // 缓存Key包含引擎类型/模型/音色/格式，避免不同AI音色共用错误缓存
         val engineKey = listOf(
+            "ai-cache-v3", // 缓存协议版本：变更后自动避开旧版损坏音频
             tts?.engineType ?: "http",
             tts?.url ?: "",
             tts?.voiceModel ?: "",
@@ -425,8 +426,28 @@ class HttpReadAloudService : BaseReadAloudService(),
         file.writeBytes(resources.openRawResource(R.raw.silent_sound).readBytes())
     }
 
+    /** 校验缓存是否为可播放音频，坏缓存直接删除并重新合成 */
     private fun hasSpeakFile(name: String): Boolean {
-        return FileUtils.exist("${ttsFolderPath}$name.mp3")
+        val file = File("${ttsFolderPath}$name.mp3")
+        if (!file.exists() || file.length() < 128L) return false
+        val valid = runCatching {
+            file.inputStream().use { input ->
+                val head = ByteArray(3)
+                val read = input.read(head)
+                read >= 2 && (
+                    // MP3帧同步字节 FF Ex
+                    ((head[0].toInt() and 0xFF) == 0xFF && (head[1].toInt() and 0xE0) == 0xE0) ||
+                    // 带ID3标签的MP3
+                    (read >= 3 && head[0] == 'I'.code.toByte() &&
+                        head[1] == 'D'.code.toByte() && head[2] == '3'.code.toByte()) ||
+                    // WAV
+                    (read >= 3 && head[0] == 'R'.code.toByte() &&
+                        head[1] == 'I'.code.toByte() && head[2] == 'F'.code.toByte())
+                )
+            }
+        }.getOrDefault(false)
+        if (!valid) file.delete()
+        return valid
     }
 
     private fun getSpeakFileAsMd5(name: String): File {
@@ -644,8 +665,21 @@ class HttpReadAloudService : BaseReadAloudService(),
                             }
 
                             if (audioBytes.size() > 0) {
+                                val bytes = audioBytes.toByteArray()
+                                // Edge/OpenAI应返回MP3；写盘前检查文件头，避免错误响应被当音频播放
+                                val validAudio = bytes.size >= 3 && (
+                                    ((bytes[0].toInt() and 0xFF) == 0xFF &&
+                                        (bytes[1].toInt() and 0xE0) == 0xE0) ||
+                                    (bytes[0] == 'I'.code.toByte() && bytes[1] == 'D'.code.toByte() &&
+                                        bytes[2] == '3'.code.toByte()) ||
+                                    (bytes[0] == 'R'.code.toByte() && bytes[1] == 'I'.code.toByte() &&
+                                        bytes[2] == 'F'.code.toByte())
+                                )
+                                if (!validAudio) {
+                                    throw IllegalStateException("AI TTS返回的不是有效音频")
+                                }
                                 val file = getSpeakFileAsMd5(fileName)
-                                file.outputStream().use { it.write(audioBytes.toByteArray()) }
+                                file.outputStream().use { it.write(bytes) }
                             } else {
                                 createSilentSound(fileName)
                             }
