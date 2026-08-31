@@ -742,51 +742,54 @@ class HttpReadAloudService : BaseReadAloudService(),
                         }
                     }
 
-                    roleSegments.forEachIndexed { roleIndex, seg ->
+                    roleSegments.forEachIndexed roleLoop@{ roleIndex, seg ->
                         ensureActive()
                         val fileName = md5SpeakFileName(
-                            "role-v2|${seg.speaker}|${seg.voice}|${seg.emotion}|${seg.text}"
+                            "role-v3|${seg.speaker}|${seg.voice}|${seg.emotion}|${seg.text}"
                         )
                         if (!hasSpeakFile(fileName)) {
-                            val bytes = try {
-                                engine.synthesize(
-                                    seg.text,
-                                    seg.voice,
-                                    speed,
-                                    options = mapOf(
-                                        "emotion" to seg.emotion,
-                                        "speaker" to seg.speaker
-                                    )
-                                )
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (primaryError: Exception) {
-                                // 角色音色失效或临时不可用时，自动回退到默认音色，不中断整章朗读
-                                val fallbackVoice = httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural"
-                                if (seg.voice == fallbackVoice) {
-                                    throw NoStackTraceException(
-                                        "角色[${seg.speaker}] 音色[${seg.voice}]合成失败: ${primaryError.localizedMessage}"
-                                    )
+                            val fallbackVoices = linkedSetOf(
+                                seg.voice,
+                                httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
+                                "zh-CN-YunxiNeural",
+                                "zh-CN-XiaoyiNeural",
+                                "zh-CN-XiaoxiaoNeural"
+                            )
+                            var bytes: ByteArray? = null
+                            var lastError: Throwable? = null
+                            for (candidateVoice in fallbackVoices) {
+                                repeat(2) { attempt ->
+                                    if (bytes != null) return@repeat
+                                    try {
+                                        if (attempt > 0) delay(500L * (attempt + 1))
+                                        val result = engine.synthesize(
+                                            seg.text,
+                                            candidateVoice,
+                                            speed,
+                                            options = mapOf(
+                                                "emotion" to seg.emotion,
+                                                "speaker" to seg.speaker
+                                            )
+                                        )
+                                        if (isPlayableAudio(result)) bytes = result
+                                        else lastError = IllegalStateException("返回无效音频")
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Throwable) {
+                                        lastError = e
+                                    }
                                 }
-                                try {
-                                    engine.synthesize(
-                                        seg.text,
-                                        fallbackVoice,
-                                        speed,
-                                        options = mapOf("emotion" to seg.emotion, "speaker" to seg.speaker)
-                                    )
-                                } catch (fallbackError: Exception) {
-                                    throw NoStackTraceException(
-                                        "角色[${seg.speaker}]音色失败且回退失败: ${fallbackError.localizedMessage}"
-                                    )
-                                }
+                                if (bytes != null) break
                             }
-                            if (!isPlayableAudio(bytes)) {
-                                throw NoStackTraceException(
-                                    "角色[${seg.speaker}] 音色[${seg.voice}]返回无效音频"
+                            if (bytes == null) {
+                                // 单个角色片段失败不再终止整章，记录后跳过继续播放后续内容
+                                AppLog.put(
+                                    "跳过角色[${seg.speaker}]合成失败片段: ${lastError?.localizedMessage}",
+                                    lastError
                                 )
+                                return@roleLoop
                             }
-                            getSpeakFileAsMd5(fileName).writeBytes(bytes)
+                            getSpeakFileAsMd5(fileName).writeBytes(bytes!!)
                         }
 
                         val isFirstRole = roleIndex == 0

@@ -25,7 +25,9 @@ class MultiRoleNarrator(
         "zh-CN-XiaoyiNeural", "zh-CN-XiaoxuanNeural", "zh-CN-XiaoxiaoNeural"
     )
     private val childVoices = listOf("zh-CN-YunxiaNeural", "zh-CN-XiaoyiNeural")
+    private enum class Gender { MALE, FEMALE, CHILD, UNKNOWN }
     private val roleVoices = linkedMapOf<String, String>()
+    private val roleGenders = linkedMapOf<String, Gender>()
     private val recentSpeakers = ArrayDeque<String>()
     private var unknownTurn = 0
 
@@ -48,6 +50,7 @@ class MultiRoleNarrator(
         }
 
         val result = mutableListOf<RoleSegment>()
+        learnGenderHints(text)
         var cursor = 0
         for ((index, match) in matches.withIndex()) {
             if (match.range.first > cursor) {
@@ -109,17 +112,57 @@ class MultiRoleNarrator(
         while (recentSpeakers.size > 6) recentSpeakers.removeFirst()
     }
 
+    /** 从整段叙述中持续学习“角色名 + 性别代词/称谓”，一旦明确后固定。 */
+    private fun learnGenderHints(text: String) {
+        val names = Regex("[\u4e00-\u9fa5·]{2,6}").findAll(text).map { it.value }.toSet()
+        names.forEach { name ->
+            val escaped = Regex.escape(name)
+            val near = Regex("$escaped.{0,12}(她|姑娘|小姐|夫人|女子|少女|母亲|姐姐|妹妹|女儿)|" +
+                "(她|姑娘|小姐|夫人|女子|少女|母亲|姐姐|妹妹|女儿).{0,12}$escaped")
+            val maleNear = Regex("$escaped.{0,12}(他|公子|少爷|男子|少年|父亲|哥哥|弟弟|儿子)|" +
+                "(他|公子|少爷|男子|少年|父亲|哥哥|弟弟|儿子).{0,12}$escaped")
+            val childNear = Regex("$escaped.{0,10}(孩子|小孩|男孩|女孩|童声)|" +
+                "(孩子|小孩|男孩|女孩|童声).{0,10}$escaped")
+            when {
+                childNear.containsMatchIn(text) -> setGender(name, Gender.CHILD)
+                near.containsMatchIn(text) -> setGender(name, Gender.FEMALE)
+                maleNear.containsMatchIn(text) -> setGender(name, Gender.MALE)
+            }
+        }
+    }
+
+    private fun setGender(speaker: String, gender: Gender) {
+        if (gender == Gender.UNKNOWN) return
+        val previous = roleGenders[speaker]
+        if (previous == null || previous == Gender.UNKNOWN) {
+            roleGenders[speaker] = gender
+            roleVoices.remove(speaker) // 新证据出现时重新分配正确音色
+        }
+    }
+
+    private fun detectGender(speaker: String, context: String): Gender {
+        roleGenders[speaker]?.takeIf { it != Gender.UNKNOWN }?.let { return it }
+        val child = Regex("小孩|孩子|男孩|女孩|少年|少女|童声|小朋友").containsMatchIn(context)
+        val female = Regex("她|女士|小姐|姑娘|夫人|母亲|妈妈|奶奶|姐姐|妹妹|女儿|女子").containsMatchIn(context) ||
+            speaker.endsWith("娘") || speaker.endsWith("妹") || speaker.endsWith("姐")
+        val male = Regex("他|先生|公子|少爷|父亲|爸爸|爷爷|哥哥|弟弟|儿子|男子").containsMatchIn(context)
+        return when {
+            child -> Gender.CHILD
+            female && !male -> Gender.FEMALE
+            male && !female -> Gender.MALE
+            else -> Gender.UNKNOWN
+        }.also { if (it != Gender.UNKNOWN) setGender(speaker, it) }
+    }
+
     private fun voiceFor(speaker: String, context: String): String {
         roleVoices[speaker]?.let { return it }
-        val child = Regex("小孩|孩子|男孩|女孩|少年|少女|童声|小朋友").containsMatchIn(context)
-        val female = Regex("她|女士|小姐|姑娘|夫人|母亲|妈妈|奶奶|姐姐|妹妹|女").containsMatchIn(context) ||
-            speaker.endsWith("娘") || speaker.endsWith("妹") || speaker.endsWith("姐")
-        val male = Regex("他|先生|公子|少爷|父亲|爸爸|爷爷|哥哥|弟弟|男").containsMatchIn(context)
-        val pool = when {
-            child -> childVoices
-            female -> femaleVoices
-            male -> maleVoices
-            else -> if (speaker.hashCode() and 1 == 0) maleVoices else femaleVoices
+        val gender = detectGender(speaker, context)
+        val pool = when (gender) {
+            Gender.CHILD -> childVoices
+            Gender.FEMALE -> femaleVoices
+            Gender.MALE -> maleVoices
+            // 性别不确定时用中性男声，杜绝男性角色被随机分到女声
+            Gender.UNKNOWN -> maleVoices
         }
         val index = Math.floorMod(speaker.hashCode(), pool.size)
         val voice = pool[index]

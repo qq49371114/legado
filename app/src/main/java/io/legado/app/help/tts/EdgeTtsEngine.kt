@@ -74,11 +74,39 @@ class EdgeTtsEngine(
         pitch: Float?,
         options: Map<String, Any>
     ): ByteArray = withContext(Dispatchers.IO) {
+        val emotion = options["emotion"]?.toString().orEmpty()
+        val prosody = emotionProsody(emotion, speed, pitch)
         val audio = ByteArrayOutputStream()
-        synthesizeInternal(text, voice, speed, pitch) { chunk ->
+        synthesizeInternal(
+            text = text,
+            voice = voice,
+            speed = prosody.speed,
+            pitch = prosody.pitch,
+            volumePercent = prosody.volumePercent
+        ) { chunk ->
             audio.write(chunk)
         }
         audio.toByteArray()
+    }
+
+    private data class Prosody(
+        val speed: Float,
+        val pitch: Float,
+        val volumePercent: Int
+    )
+
+    /** Edge不支持Azure情绪style，使用语速、音调、音量模拟真实情绪。 */
+    private fun emotionProsody(emotion: String, baseSpeed: Float, explicitPitch: Float?): Prosody {
+        val basePitch = explicitPitch ?: 1f
+        return when (emotion.lowercase()) {
+            "excited" -> Prosody((baseSpeed * 1.18f).coerceAtMost(1.65f), basePitch * 1.10f, 10)
+            "cheerful", "happy" -> Prosody((baseSpeed * 1.10f).coerceAtMost(1.55f), basePitch * 1.07f, 6)
+            "angry" -> Prosody((baseSpeed * 1.12f).coerceAtMost(1.60f), basePitch * 0.93f, 12)
+            "sad" -> Prosody((baseSpeed * 0.82f).coerceAtLeast(0.55f), basePitch * 0.90f, -4)
+            "friendly" -> Prosody((baseSpeed * 0.96f).coerceAtLeast(0.65f), basePitch * 1.03f, 2)
+            "fearful", "suspense" -> Prosody((baseSpeed * 0.88f).coerceAtLeast(0.60f), basePitch * 0.94f, -2)
+            else -> Prosody(baseSpeed, basePitch, 0)
+        }
     }
 
     override suspend fun synthesizeStream(
@@ -87,7 +115,7 @@ class EdgeTtsEngine(
         speed: Float,
         options: Map<String, Any>
     ): Flow<ByteArray> = kotlinx.coroutines.flow.channelFlow {
-        synthesizeInternal(text, voice, speed, null) { chunk ->
+        synthesizeInternal(text, voice, speed, null, 0) { chunk ->
             trySend(chunk)  // channelFlow 内用 trySend 发送
         }
     }.flowOn(Dispatchers.IO)
@@ -101,6 +129,7 @@ class EdgeTtsEngine(
         voice: String?,
         speed: Float,
         pitch: Float?,
+        volumePercent: Int,
         onChunk: ((ByteArray) -> Unit)?
     ) {
         val usedVoice = voice ?: this.voice
@@ -108,11 +137,12 @@ class EdgeTtsEngine(
 
         // 构建SSML
         val rateStr = "${(speed * 100 - 100).toInt()}%"
-        val pitchStr = pitch?.let { "${(it * 100 - 100).toInt()}%" } ?: "+0Hz"
+        val pitchStr = pitch?.let { "${(it * 100 - 100).toInt().coerceIn(-40, 40)}%" } ?: "+0%"
+        val volumeStr = "${volumePercent.coerceIn(-20, 20).let { if (it >= 0) "+$it%" else "$it%" }}"
         val ssml = buildString {
             append("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>")
             append("<voice name='$usedVoice'>")
-            append("<prosody pitch='$pitchStr' rate='$rateStr' volume='+0%'>")
+            append("<prosody pitch='$pitchStr' rate='$rateStr' volume='$volumeStr'>")
             append(text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
             append("</prosody></voice></speak>")
         }

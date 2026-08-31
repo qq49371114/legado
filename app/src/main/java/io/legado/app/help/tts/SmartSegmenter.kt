@@ -140,11 +140,15 @@ object SmartSegmenter {
         if (sadKeywords.any { text.contains(it) }) return "sad"
 
         // 愤怒关键词
-        val angryKeywords = listOf("怒", "气", "愤", "混蛋", "该死", "可恶", "滚", "杀", "打", "骂")
+        val angryKeywords = listOf("怒", "气", "愤", "混蛋", "该死", "可恶", "滚", "杀", "打", "骂", "吼", "咆哮", "怒斥", "怒火", "暴怒")
         if (angryKeywords.any { text.contains(it) }) return "angry"
 
+        // 恐惧/悬疑关键词
+        val fearKeywords = listOf("害怕", "恐惧", "惊恐", "颤抖", "冷汗", "诡异", "阴森", "危险", "不安", "心跳")
+        if (fearKeywords.any { text.contains(it) }) return "fearful"
+
         // 欢快关键词
-        val happyKeywords = listOf("笑", "开心", "快乐", "高兴", "兴奋", "哈哈", "嘻嘻", "嘿嘿")
+        val happyKeywords = listOf("笑", "开心", "快乐", "高兴", "兴奋", "哈哈", "嘻嘻", "嘿嘿", "微笑", "欢呼", "喜悦")
         if (happyKeywords.any { text.contains(it) }) return "cheerful"
 
         return "neutral"
