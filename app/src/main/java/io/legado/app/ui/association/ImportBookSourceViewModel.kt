@@ -193,15 +193,32 @@ class ImportBookSourceViewModel(app: Application) : BaseViewModel(app) {
             } else {
                 url(url)
             }
-        }.unCompress {
-            GSON.fromJsonArray<BookSource>(it).getOrThrow().let { list ->
-                val source = list.firstOrNull() ?: return@let
-                if (source.bookSourceUrl.isEmpty()) {
-                    throw NoStackTraceException("不是书源")
-                }
-                allSources.addAll(list)
+        }.unCompress { input ->
+            importSourceJsonText(input.bufferedReader().use { it.readText() })
+        }
+    }
+
+    /**
+     * 兼容三种常见返回：书源数组、单个书源对象、被二次JSON编码的字符串。
+     * 例如服务端返回 "[{\"bookSourceUrl\":...}]" 时先解包再解析。
+     */
+    private fun importSourceJsonText(rawText: String) {
+        var text = rawText.trim().removePrefix("\uFEFF")
+        repeat(3) {
+            if (text.startsWith('"') && text.endsWith('"')) {
+                text = GSON.fromJsonObject<String>(text).getOrThrow().trim()
+            } else {
+                return@repeat
             }
         }
+        val items = when {
+            text.isJsonArray() -> GSON.fromJsonArray<BookSource>(text).getOrThrow()
+            text.isJsonObject() -> listOf(GSON.fromJsonObject<BookSource>(text).getOrThrow())
+            else -> throw NoStackTraceException("书源返回内容不是JSON数组或对象")
+        }
+        val valid = items.filter { it.bookSourceUrl.isNotBlank() }
+        if (valid.isEmpty()) throw NoStackTraceException("不是有效书源")
+        allSources.addAll(valid)
     }
 
     private fun comparisonSource() {
