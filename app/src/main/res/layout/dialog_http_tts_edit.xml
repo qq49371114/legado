@@ -131,6 +131,44 @@
                     android:paddingVertical="8dp"
                     android:text="自动多人多角色朗读" />
 
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/sw_audio_drama"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingHorizontal="12dp"
+                    android:paddingVertical="8dp"
+                    android:text="AI有声剧：自动情节背景音" />
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/sw_duck_background"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingHorizontal="12dp"
+                    android:paddingVertical="8dp"
+                    android:text="对白时自动压低背景音" />
+
+                <io.legado.app.ui.widget.text.TextInputLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="背景音量百分比 (0-40)">
+                    <io.legado.app.lib.theme.view.ThemeEditText
+                        android:id="@+id/tv_background_volume"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number" />
+                </io.legado.app.ui.widget.text.TextInputLayout>
+
+                <io.legado.app.ui.widget.text.TextInputLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="场景最短持续秒数 (10-300)">
+                    <io.legado.app.lib.theme.view.ThemeEditText
+                        android:id="@+id/tv_scene_hold_seconds"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number" />
+                </io.legado.app.ui.widget.text.TextInputLayout>
+
                 <io.legado.app.ui.widget.text.TextInputLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

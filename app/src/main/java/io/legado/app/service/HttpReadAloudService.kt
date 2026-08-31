@@ -36,6 +36,7 @@ import io.legado.app.help.http.okHttpClient
 import io.legado.app.help.tts.AiTtsEngineFactory
 import io.legado.app.help.tts.MultiRoleNarrator
 import io.legado.app.help.tts.SmartSegmenter
+import io.legado.app.help.tts.StorySceneDetector
 import io.legado.app.model.ReadAloud
 import io.legado.app.model.ReadBook
 import io.legado.app.model.analyzeRule.AnalyzeUrl
@@ -72,6 +73,16 @@ class HttpReadAloudService : BaseReadAloudService(),
     private val exoPlayer: ExoPlayer by lazy {
         ExoPlayer.Builder(this).build()
     }
+    /** 有声剧背景播放器，与主语音播放器独立混音 */
+    private val backgroundPlayer: ExoPlayer by lazy {
+        ExoPlayer.Builder(this).build().apply {
+            repeatMode = Player.REPEAT_MODE_ONE
+        }
+    }
+    private var backgroundScene = StorySceneDetector.Scene.NONE
+    private var backgroundChangedAt = 0L
+    private var sceneDetector = StorySceneDetector()
+    private var backgroundFadeJob: Job? = null
     private val ttsFolderPath: String by lazy {
         cacheDir.absolutePath + File.separator + "httpTTS" + File.separator
     }
@@ -104,7 +115,9 @@ class HttpReadAloudService : BaseReadAloudService(),
     override fun onDestroy() {
         super.onDestroy()
         downloadTask?.cancel()
+        backgroundFadeJob?.cancel()
         exoPlayer.release()
+        backgroundPlayer.release()
         cache.release()
         Coroutine.async {
             removeCacheFile()
@@ -142,6 +155,10 @@ class HttpReadAloudService : BaseReadAloudService(),
 
     override fun playStop() {
         exoPlayer.stop()
+        backgroundPlayer.stop()
+        backgroundScene = StorySceneDetector.Scene.NONE
+        backgroundChangedAt = 0L
+        sceneDetector.reset()
         playIndexJob?.cancel()
     }
 
@@ -418,6 +435,8 @@ class HttpReadAloudService : BaseReadAloudService(),
             tts?.apiFormat ?: "mp3",
             tts?.multiRoleEnabled?.toString() ?: "false",
             tts?.narratorVoice ?: "",
+            tts?.audioDramaEnabled?.toString() ?: "false",
+            tts?.backgroundVolume?.toString() ?: "12",
             speechRate.toString()
         ).joinToString("-|-" )
         return MD5Utils.md5Encode16(textChapter?.title ?: "") + "_" +
@@ -494,6 +513,7 @@ class HttpReadAloudService : BaseReadAloudService(),
         kotlin.runCatching {
             playIndexJob?.cancel()
             exoPlayer.pause()
+            backgroundPlayer.pause()
         }
     }
 
@@ -504,6 +524,9 @@ class HttpReadAloudService : BaseReadAloudService(),
                 play()
             } else {
                 exoPlayer.play()
+                if (ReadAloud.httpTTS?.audioDramaEnabled == true && backgroundPlayer.mediaItemCount > 0) {
+                    backgroundPlayer.play()
+                }
                 upPlayPos()
             }
         }
@@ -591,13 +614,24 @@ class HttpReadAloudService : BaseReadAloudService(),
     }
 
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-        if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) return
         if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
             playErrorNo = 0
         }
-        // 多角色模式中，同一段落会有多个角色媒体项；只有切到下一段的first时才推进文本进度。
         val mediaId = mediaItem?.mediaId.orEmpty()
-        if (mediaId.startsWith("ai-role:") && mediaId.endsWith(":next")) {
+        if (mediaId.startsWith("ai-role:")) {
+            val parts = mediaId.split(":")
+            val scene = parts.getOrNull(3)?.let {
+                runCatching { StorySceneDetector.Scene.valueOf(it) }.getOrNull()
+            }
+            val httpTts = ReadAloud.httpTTS
+            if (httpTts?.audioDramaEnabled == true && scene != null && scene != StorySceneDetector.Scene.NONE) {
+                updateBackgroundScene(scene, httpTts)
+            }
+            // 首个媒体项以PLAYLIST_CHANGED进入，只启动背景，不推进正文。
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) return
+            // 同一段落后续角色切换不推进正文。
+            if (parts.getOrNull(2) == "next") return
+        } else if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
             return
         }
         updateNextPos()
@@ -659,6 +693,12 @@ class HttpReadAloudService : BaseReadAloudService(),
                     if (paragraphIndex < nowSpeak) return@forEachIndexed
                     val speakText = content.replace(AppPattern.notReadAloudRegex, "")
                     if (speakText.isEmpty()) return@forEachIndexed
+
+                    val sceneName = if (httpTts.audioDramaEnabled) {
+                        sceneDetector.classify(speakText).name
+                    } else {
+                        StorySceneDetector.Scene.NONE.name
+                    }
 
                     val roleSegments = if (httpTts.multiRoleEnabled) {
                         narrator.analyze(speakText)
@@ -722,7 +762,7 @@ class HttpReadAloudService : BaseReadAloudService(),
                         }
 
                         val isFirstRole = roleIndex == 0
-                        val mediaId = "ai-role:$paragraphIndex:${if (isFirstRole) "first" else "next"}"
+                        val mediaId = "ai-role:$paragraphIndex:${if (isFirstRole) "first" else "next"}:$sceneName"
                         val mediaItem = MediaItem.Builder()
                             .setMediaId(mediaId)
                             .setUri(Uri.fromFile(getSpeakFileAsMd5(fileName)))
@@ -755,6 +795,42 @@ class HttpReadAloudService : BaseReadAloudService(),
                 bytes[2] == '3'.code.toByte()) ||
             (bytes[0] == 'R'.code.toByte() && bytes[1] == 'I'.code.toByte() &&
                 bytes[2] == 'F'.code.toByte())
+    }
+
+    /** 切换到实际正在播放段落的场景，独立播放器循环并平滑淡入。 */
+    private fun updateBackgroundScene(scene: StorySceneDetector.Scene, httpTts: HttpTTS) {
+        if (scene == StorySceneDetector.Scene.NONE || scene == backgroundScene) return
+        val now = System.currentTimeMillis()
+        val holdMs = httpTts.sceneHoldSeconds.coerceIn(10, 300) * 1000L
+        if (backgroundScene != StorySceneDetector.Scene.NONE && now - backgroundChangedAt < holdMs) return
+        backgroundScene = scene
+        backgroundChangedAt = now
+        val file = when (scene) {
+            StorySceneDetector.Scene.RAIN -> "rain.mp3"
+            StorySceneDetector.Scene.FOREST -> "forest.mp3"
+            StorySceneDetector.Scene.BATTLE -> "battle.mp3"
+            StorySceneDetector.Scene.SUSPENSE -> "suspense.mp3"
+            StorySceneDetector.Scene.ROMANCE -> "romance.mp3"
+            StorySceneDetector.Scene.SAD -> "sad.mp3"
+            StorySceneDetector.Scene.PEACEFUL -> "peaceful.mp3"
+            StorySceneDetector.Scene.NONE -> return
+        }
+        lifecycleScope.launch {
+            val uri = Uri.parse("asset:///audio_scene/$file")
+            backgroundFadeJob?.cancel()
+            backgroundPlayer.setMediaItem(MediaItem.fromUri(uri))
+            backgroundPlayer.volume = 0f
+            backgroundPlayer.prepare()
+            backgroundPlayer.playWhenReady = true
+            val configured = httpTts.backgroundVolume.coerceIn(0, 40) / 100f
+            val target = if (httpTts.duckBackground) configured * 0.65f else configured
+            backgroundFadeJob = lifecycleScope.launch {
+                repeat(12) { step ->
+                    backgroundPlayer.volume = target * (step + 1) / 12f
+                    delay(100)
+                }
+            }
+        }
     }
 
     /**

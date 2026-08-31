@@ -61,7 +61,19 @@ data class HttpTTS(
     @ColumnInfo(defaultValue = "0")
     var multiRoleEnabled: Boolean = false,
     /** 旁白音色 */
-    var narratorVoice: String? = null
+    var narratorVoice: String? = null,
+    /** AI有声剧：自动背景氛围 */
+    @ColumnInfo(defaultValue = "0")
+    var audioDramaEnabled: Boolean = false,
+    /** 背景音量百分比 */
+    @ColumnInfo(defaultValue = "12")
+    var backgroundVolume: Int = 12,
+    /** 场景最短持续秒数 */
+    @ColumnInfo(defaultValue = "45")
+    var sceneHoldSeconds: Int = 45,
+    /** 语音播放时自动压低背景 */
+    @ColumnInfo(defaultValue = "1")
+    var duckBackground: Boolean = true
 ) : BaseSource {
 
     override fun getTag(): String {
@@ -123,7 +135,23 @@ data class HttpTTS(
                             else -> it.toString().toBoolean()
                         }
                     } ?: false,
-                    narratorVoice = doc.readString("$.narratorVoice")
+                    narratorVoice = doc.readString("$.narratorVoice"),
+                    audioDramaEnabled = doc.read<Any?>("$.audioDramaEnabled")?.let {
+                        when (it) {
+                            is Boolean -> it
+                            is Number -> it.toInt() != 0
+                            else -> it.toString().toBoolean()
+                        }
+                    } ?: false,
+                    backgroundVolume = doc.read<Any?>("$.backgroundVolume")?.toString()?.toIntOrNull() ?: 12,
+                    sceneHoldSeconds = doc.read<Any?>("$.sceneHoldSeconds")?.toString()?.toIntOrNull() ?: 45,
+                    duckBackground = doc.read<Any?>("$.duckBackground")?.let {
+                        when (it) {
+                            is Boolean -> it
+                            is Number -> it.toInt() != 0
+                            else -> it.toString().toBoolean()
+                        }
+                    } ?: true
                 )
             }
         }

@@ -85,6 +85,10 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
         binding.tvApiFormat.setText(httpTTS.apiFormat)
         binding.swStreamMode.isChecked = httpTTS.streamMode
         binding.swMultiRole.isChecked = httpTTS.multiRoleEnabled
+        binding.swAudioDrama.isChecked = httpTTS.audioDramaEnabled
+        binding.swDuckBackground.isChecked = httpTTS.duckBackground
+        binding.tvBackgroundVolume.setText(httpTTS.backgroundVolume.toString())
+        binding.tvSceneHoldSeconds.setText(httpTTS.sceneHoldSeconds.toString())
         binding.tvNarratorVoice.setText(httpTTS.narratorVoice ?: "zh-CN-YunyangNeural")
         binding.tvConcurrentRate.setText(httpTTS.concurrentRate)
         binding.tvLoginUrl.setText(httpTTS.loginUrl)
@@ -156,7 +160,11 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
             pitchRange = original?.pitchRange,
             emotionTags = original?.emotionTags,
             multiRoleEnabled = binding.swMultiRole.isChecked,
-            narratorVoice = binding.tvNarratorVoice.text?.toString()?.trim()?.ifBlank { null }
+            narratorVoice = binding.tvNarratorVoice.text?.toString()?.trim()?.ifBlank { null },
+            audioDramaEnabled = binding.swAudioDrama.isChecked,
+            backgroundVolume = binding.tvBackgroundVolume.text?.toString()?.toIntOrNull()?.coerceIn(0, 40) ?: 12,
+            sceneHoldSeconds = binding.tvSceneHoldSeconds.text?.toString()?.toIntOrNull()?.coerceIn(10, 300) ?: 45,
+            duckBackground = binding.swDuckBackground.isChecked
         )
     }
 
