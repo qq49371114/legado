@@ -1,6 +1,5 @@
 package io.legado.app.help.tts
 
-import io.legado.app.constant.AppLog
 import io.legado.app.data.entities.HttpTTS
 import io.legado.app.help.http.okHttpClient
 import kotlinx.coroutines.Dispatchers
@@ -30,10 +29,32 @@ class AzureTtsEngine(
     override val supportsSsml: Boolean = true
     override val maxCharPerRequest: Int = 10000
 
+    private val region: String
+        get() = httpTTS.getLoginInfoMap()
+            ?.let { it["region"] ?: it["Region"] }
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: "eastus"
+
     private val endpoint: String
-        get() = httpTTS.url.ifBlank {
-            "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1"
+        get() {
+            // 登录配置中的region优先，避免预设URL写死eastus导致Key区域不匹配
+            val configuredRegion = httpTTS.getLoginInfoMap()
+                ?.let { it["region"] ?: it["Region"] }
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            return if (configuredRegion != null) {
+                "https://$configuredRegion.tts.speech.microsoft.com/cognitiveservices/v1"
+            } else {
+                httpTTS.url.takeIf { it.startsWith("https://") }
+                    ?: "https://$region.tts.speech.microsoft.com/cognitiveservices/v1"
+            }
         }
+
+    private val outputFormat: String
+        get() = httpTTS.apiFormat
+            .takeIf { it.startsWith("audio-") || it.startsWith("riff-") }
+            ?: "audio-24khz-48kbitrate-mono-mp3"
 
     private val subscriptionKey: String?
         get() {
@@ -103,27 +124,35 @@ class AzureTtsEngine(
         val emotion = options["emotion"] as? String
         val ssml = buildSsml(text, usedVoice, speed, pitch, emotion)
 
-        val key = subscriptionKey ?: run {
-            AppLog.put("Azure TTS: 未配置 Subscription Key")
-            return@withContext ByteArray(0)
-        }
+        val key = subscriptionKey ?: throw IllegalStateException(
+            "Azure TTS未配置subscriptionKey，请在引擎登录中填写Key和region"
+        )
 
         val request = Request.Builder()
             .url(endpoint)
             .post(ssml.toRequestBody("application/ssml+xml".toMediaType()))
             .header("Ocp-Apim-Subscription-Key", key)
             .header("Content-Type", "application/ssml+xml")
-            .header("X-Microsoft-OutputFormat", httpTTS.apiFormat.ifBlank { "audio-16khz-128kbitrate-mono-mp3" })
+            .header("X-Microsoft-OutputFormat", outputFormat)
             .header("User-Agent", "Legado")
             .build()
 
         val response = okHttpClient.newCall(request).execute()
         if (!response.isSuccessful) {
-            val errorBody = response.body?.string() ?: ""
-            AppLog.put("Azure TTS 合成失败: HTTP ${response.code}\n$errorBody")
-            return@withContext ByteArray(0)
+            val errorBody = response.body?.string()?.take(500).orEmpty()
+            val hint = when (response.code) {
+                401, 403 -> "Key无效或region与Azure资源不匹配"
+                404 -> "Azure区域或接口地址错误"
+                429 -> "Azure额度不足或请求过快"
+                else -> "请检查网络和Azure语音资源"
+            }
+            throw IllegalStateException(
+                "Azure TTS HTTP ${response.code}: $hint${if (errorBody.isBlank()) "" else "\n$errorBody"}"
+            )
         }
-        response.body?.bytes() ?: ByteArray(0)
+        val bytes = response.body?.bytes() ?: ByteArray(0)
+        if (bytes.isEmpty()) throw IllegalStateException("Azure TTS返回空音频")
+        bytes
     }
 
     override suspend fun synthesizeStream(
@@ -135,18 +164,22 @@ class AzureTtsEngine(
         val usedVoice = voice ?: this@AzureTtsEngine.voice
         val ssml = buildSsml(text, usedVoice, speed, null, options["emotion"] as? String)
 
-        val key = subscriptionKey ?: return@flow
+        val key = subscriptionKey ?: throw IllegalStateException(
+            "Azure TTS未配置subscriptionKey，请在引擎登录中填写Key和region"
+        )
 
         val request = Request.Builder()
             .url(endpoint)
             .post(ssml.toRequestBody("application/ssml+xml".toMediaType()))
             .header("Ocp-Apim-Subscription-Key", key)
             .header("Content-Type", "application/ssml+xml")
-            .header("X-Microsoft-OutputFormat", httpTTS.apiFormat.ifBlank { "audio-16khz-128kbitrate-mono-mp3" })
+            .header("X-Microsoft-OutputFormat", outputFormat)
             .build()
 
         val response = okHttpClient.newCall(request).execute()
-        if (!response.isSuccessful) return@flow
+        if (!response.isSuccessful) {
+            throw IllegalStateException("Azure TTS HTTP ${response.code}: Key或region配置错误")
+        }
 
         val inputStream = response.body?.byteStream() ?: return@flow
         val buffer = ByteArray(8192)

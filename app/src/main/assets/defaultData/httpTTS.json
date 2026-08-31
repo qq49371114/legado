@@ -96,7 +96,7 @@
   {
     "id": -220,
     "name": "Azure 晓晓(情感·女)",
-    "url": "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1",
+    "url": "",
     "engineType": "azure",
     "voiceName": "zh-CN-XiaoxiaoNeural",
     "apiFormat": "audio-16khz-128kbitrate-mono-mp3",
@@ -104,19 +104,19 @@
     "ssmlSupport": true,
     "emotionTags": "[\"cheerful\",\"sad\",\"angry\",\"excited\",\"friendly\"]",
     "speedRange": "0.5-2.0",
-    "loginUi": [{"name": "subscriptionKey", "type": "password"}]
+    "loginUi": [{"name": "subscriptionKey", "type": "password"}, {"name": "region", "type": "text"}]
   },
   {
     "id": -221,
     "name": "Azure 云希(情感·男)",
-    "url": "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1",
+    "url": "",
     "engineType": "azure",
     "voiceName": "zh-CN-YunxiNeural",
     "apiFormat": "audio-16khz-128kbitrate-mono-mp3",
     "streamMode": true,
     "ssmlSupport": true,
     "speedRange": "0.5-2.0",
-    "loginUi": [{"name": "subscriptionKey", "type": "password"}]
+    "loginUi": [{"name": "subscriptionKey", "type": "password"}, {"name": "region", "type": "text"}]
   },
   {
     "id": -230,

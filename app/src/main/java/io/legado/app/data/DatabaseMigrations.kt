@@ -20,7 +20,8 @@ object DatabaseMigrations {
             migration_31_32, migration_32_33, migration_33_34, migration_34_35,
             migration_35_36, migration_36_37, migration_37_38, migration_38_39,
             migration_39_40, migration_40_41, migration_41_42, migration_42_43,
-            MIGRATION_71_72, MIGRATION_72_73, MIGRATION_73_74, MIGRATION_74_75
+            MIGRATION_71_72, MIGRATION_72_73, MIGRATION_73_74, MIGRATION_74_75,
+            MIGRATION_75_76
         )
     }
 
@@ -437,6 +438,19 @@ object DatabaseMigrations {
             db.execSQL("ALTER TABLE httpTTS ADD COLUMN backgroundVolume INTEGER NOT NULL DEFAULT 12")
             db.execSQL("ALTER TABLE httpTTS ADD COLUMN sceneHoldSeconds INTEGER NOT NULL DEFAULT 45")
             db.execSQL("ALTER TABLE httpTTS ADD COLUMN duckBackground INTEGER NOT NULL DEFAULT 1")
+        }
+    }
+
+    @Suppress("ClassName")
+    val MIGRATION_75_76 = object : Migration(75, 76) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            val loginUi = """[{"name":"subscriptionKey","type":"password"},{"name":"region","type":"text"}]"""
+            db.execSQL(
+                """UPDATE httpTTS SET url = '', streamMode = 0,
+                    apiFormat = 'audio-24khz-48kbitrate-mono-mp3', loginUi = ?
+                   WHERE id IN (-220, -221)""".trimIndent(),
+                arrayOf(loginUi)
+            )
         }
     }
 
