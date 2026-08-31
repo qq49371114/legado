@@ -565,6 +565,10 @@ class HttpReadAloudService : BaseReadAloudService(),
     override fun upSpeechRate(reset: Boolean) {
         downloadTask?.cancel()
         exoPlayer.stop()
+        backgroundPlayer.stop()
+        backgroundPlayer.clearMediaItems()
+        backgroundScene = StorySceneDetector.Scene.NONE
+        backgroundChangedAt = 0L
         speechRate = AppConfig.speechRatePlay + 5
         if (AppConfig.streamReadAloudAudio) {
             downloadAndPlayAudiosStream()
@@ -594,6 +598,10 @@ class HttpReadAloudService : BaseReadAloudService(),
             Player.STATE_ENDED -> {
                 // 结束
                 playErrorNo = 0
+                backgroundPlayer.stop()
+                backgroundPlayer.clearMediaItems()
+                backgroundScene = StorySceneDetector.Scene.NONE
+                backgroundChangedAt = 0L
                 updateNextPos()
                 exoPlayer.stop()
                 exoPlayer.clearMediaItems()

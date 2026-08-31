@@ -103,8 +103,9 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
                 toastOnUi("保存成功")
             }
             R.id.menu_login -> dataFromView().let { httpTts ->
-                if (httpTts.loginUrl.isNullOrBlank()) {
-                    toastOnUi("登录url不能为空")
+                // 自定义登录UI（如Azure Key+Region、OpenAI Key）不需要loginUrl
+                if (httpTts.loginUrl.isNullOrBlank() && httpTts.loginUi.isNullOrBlank()) {
+                    toastOnUi("登录url和登录UI不能同时为空")
                 } else {
                     viewModel.save(httpTts) {
                         startActivity<SourceLoginActivity> {
