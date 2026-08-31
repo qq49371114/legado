@@ -454,7 +454,10 @@ class HttpReadAloudService : BaseReadAloudService(),
     }
 
     private fun getSpeakFileAsMd5(name: String): File {
-        return File("${ttsFolderPath}$name.mp3")
+        return File("${ttsFolderPath}$name.mp3").apply {
+            // 多角色模式可能在传统createSpeakFile之前直接写入，必须先创建缓存目录
+            parentFile?.mkdirs()
+        }
     }
 
     private fun createSpeakFile(name: String): File {
@@ -762,7 +765,9 @@ class HttpReadAloudService : BaseReadAloudService(),
                     }
 
                     val fileName = "ai_stream_${System.currentTimeMillis()}_$index"
-                    val tempFile = File(ttsFolderPath, "$fileName.${httpTts.apiFormat}")
+                    val tempFile = File(ttsFolderPath, "$fileName.${httpTts.apiFormat}").apply {
+                        parentFile?.mkdirs()
+                    }
 
                     runCatching {
                         // 流式接收音频块并写入临时文件；完成后交给ExoPlayer播放
