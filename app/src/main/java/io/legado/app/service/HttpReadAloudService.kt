@@ -77,6 +77,14 @@ class HttpReadAloudService : BaseReadAloudService(),
     private val backgroundPlayer: ExoPlayer by lazy {
         ExoPlayer.Builder(this).build().apply {
             repeatMode = Player.REPEAT_MODE_ONE
+            addListener(object : Player.Listener {
+                override fun onPlayerError(error: PlaybackException) {
+                    val message = "背景音播放失败: ${error.localizedMessage}"
+                    AppLog.put(message, error)
+                    toastOnUi(message)
+                    backgroundScene = StorySceneDetector.Scene.NONE
+                }
+            })
         }
     }
     private var backgroundScene = StorySceneDetector.Scene.NONE
@@ -703,7 +711,10 @@ class HttpReadAloudService : BaseReadAloudService(),
                     if (speakText.isEmpty()) return@forEachIndexed
 
                     val sceneName = if (httpTts.audioDramaEnabled) {
-                        sceneDetector.classify(speakText).name
+                        // 无明显情节关键词时使用宁静底乐，确保开启有声剧后始终能听到背景
+                        sceneDetector.classify(speakText)
+                            .takeIf { it != StorySceneDetector.Scene.NONE }
+                            ?.name ?: StorySceneDetector.Scene.PEACEFUL.name
                     } else {
                         StorySceneDetector.Scene.NONE.name
                     }
@@ -805,6 +816,17 @@ class HttpReadAloudService : BaseReadAloudService(),
                 bytes[2] == 'F'.code.toByte())
     }
 
+    private fun sceneAudioFile(assetName: String): File {
+        val dir = File(cacheDir, "audio_scene").apply { mkdirs() }
+        val target = File(dir, assetName)
+        if (!target.exists() || target.length() < 1024L) {
+            assets.open("audio_scene/$assetName").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+        }
+        return target
+    }
+
     /** 切换到实际正在播放段落的场景，独立播放器循环并平滑淡入。 */
     private fun updateBackgroundScene(scene: StorySceneDetector.Scene, httpTts: HttpTTS) {
         if (scene == StorySceneDetector.Scene.NONE || scene == backgroundScene) return
@@ -824,19 +846,27 @@ class HttpReadAloudService : BaseReadAloudService(),
             StorySceneDetector.Scene.NONE -> return
         }
         lifecycleScope.launch {
-            val uri = Uri.parse("asset:///audio_scene/$file")
-            backgroundFadeJob?.cancel()
-            backgroundPlayer.setMediaItem(MediaItem.fromUri(uri))
-            backgroundPlayer.volume = 0f
-            backgroundPlayer.prepare()
-            backgroundPlayer.playWhenReady = true
-            val configured = httpTts.backgroundVolume.coerceIn(0, 40) / 100f
-            val target = if (httpTts.duckBackground) configured * 0.65f else configured
-            backgroundFadeJob = lifecycleScope.launch {
-                repeat(12) { step ->
-                    backgroundPlayer.volume = target * (step + 1) / 12f
-                    delay(100)
+            runCatching {
+                // 先从assets复制到应用缓存，再用file Uri播放，兼容所有Media3 DataSource实现
+                val audioFile = sceneAudioFile(file)
+                backgroundFadeJob?.cancel()
+                backgroundPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(audioFile)))
+                backgroundPlayer.volume = 0f
+                backgroundPlayer.prepare()
+                backgroundPlayer.playWhenReady = true
+                val configured = httpTts.backgroundVolume.coerceIn(0, 40) / 100f
+                val target = if (httpTts.duckBackground) configured * 0.65f else configured
+                backgroundFadeJob = lifecycleScope.launch {
+                    repeat(12) { step ->
+                        backgroundPlayer.volume = target * (step + 1) / 12f
+                        delay(100)
+                    }
                 }
+            }.onFailure {
+                val message = "背景音加载失败: ${it.localizedMessage}"
+                AppLog.put(message, it)
+                toastOnUi(message)
+                backgroundScene = StorySceneDetector.Scene.NONE
             }
         }
     }
