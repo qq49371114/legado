@@ -30,14 +30,14 @@ class MultiRoleNarrator(
     private val recentSpeakers = ArrayDeque<String>()
     private var unknownTurn = 0
 
-    private val quoteRegex = Regex("[“「『\"]([^”」』\"]+)[”」』\"]")
+    private val quoteRegex = Regex("""[“「『"]([^”」』"]+)[”」』"]""")
     private val beforeSpeakerRegex = Regex(
-        "([\p{IsHan}A-Za-z0-9·]{1,12})(?:低声|轻声|大声|忽然|冷冷|笑着|哭着|怒|厉声|柔声|沉声|喃喃)?" +
-            "(?:说|道|问|答|喊|叫|笑|哭|吼|骂|叹|嘟囔|反问|回应)(?:道)?[：:,，]?\s*$"
+        """([\p{IsHan}A-Za-z0-9·]{1,12})(?:低声|轻声|大声|忽然|冷冷|笑着|哭着|怒|厉声|柔声|沉声|喃喃)?""" +
+            """(?:说|道|问|答|喊|叫|笑|哭|吼|骂|叹|嘟囔|反问|回应)(?:道)?[：:,，]?\s*$"""
     )
     private val afterSpeakerRegex = Regex(
-        "^\s*[，,。.!！?？]?\s*([\p{IsHan}A-Za-z0-9·]{1,12})(?:低声|轻声|大声|笑着|哭着)?" +
-            "(?:说|道|问|答|喊|叫|笑|哭|吼|骂|叹)(?:道)?"
+        """^\s*[，,。.!！?？]?\s*([\p{IsHan}A-Za-z0-9·]{1,12})(?:低声|轻声|大声|笑着|哭着)?""" +
+            """(?:说|道|问|答|喊|叫|笑|哭|吼|骂|叹)(?:道)?"""
     )
 
     fun analyze(paragraph: String): List<RoleSegment> {
