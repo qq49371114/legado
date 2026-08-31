@@ -34,6 +34,7 @@ import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.exoplayer.InputStreamDataSource
 import io.legado.app.help.http.okHttpClient
 import io.legado.app.help.tts.AiTtsEngineFactory
+import io.legado.app.help.tts.MultiRoleNarrator
 import io.legado.app.help.tts.SmartSegmenter
 import io.legado.app.model.ReadAloud
 import io.legado.app.model.ReadBook
@@ -415,6 +416,8 @@ class HttpReadAloudService : BaseReadAloudService(),
             tts?.voiceModel ?: "",
             tts?.voiceName ?: "",
             tts?.apiFormat ?: "mp3",
+            tts?.multiRoleEnabled?.toString() ?: "false",
+            tts?.narratorVoice ?: "",
             speechRate.toString()
         ).joinToString("-|-" )
         return MD5Utils.md5Encode16(textChapter?.title ?: "") + "_" +
@@ -637,6 +640,10 @@ class HttpReadAloudService : BaseReadAloudService(),
                 val httpTts = ReadAloud.httpTTS ?: throw NoStackTraceException("tts is null")
                 val engine = AiTtsEngineFactory.create(httpTts)
                 val speed = (AppConfig.speechRatePlay + 5) / 10.0f
+                val multiRoleNarrator = MultiRoleNarrator(
+                    narratorVoice = httpTts.narratorVoice ?: "zh-CN-YunyangNeural",
+                    defaultVoice = httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural"
+                )
                 contentList.forEachIndexed { index, content ->
                     ensureActive()
                     if (index < nowSpeak) return@forEachIndexed
@@ -650,17 +657,35 @@ class HttpReadAloudService : BaseReadAloudService(),
                     val fileName = md5SpeakFileName(speakText)
                     if (!hasSpeakFile(fileName)) {
                         runCatching {
-                            // 超长文本智能分段
-                            val segments = if (httpTts.maxCharLimit > 0 && speakText.length > httpTts.maxCharLimit) {
-                                SmartSegmenter.segment(speakText, httpTts.maxCharLimit)
+                            // 多角色模式按旁白/角色切片；普通模式沿用智能长文本分段
+                            val roleSegments = if (httpTts.multiRoleEnabled) {
+                                multiRoleNarrator.analyze(speakText)
                             } else {
-                                listOf(speakText)
+                                val texts = if (httpTts.maxCharLimit > 0 && speakText.length > httpTts.maxCharLimit) {
+                                    SmartSegmenter.segment(speakText, httpTts.maxCharLimit)
+                                } else {
+                                    listOf(speakText)
+                                }
+                                texts.map {
+                                    MultiRoleNarrator.RoleSegment(
+                                        text = it,
+                                        speaker = "默认",
+                                        voice = httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
+                                        emotion = SmartSegmenter.detectEmotion(it),
+                                        dialogue = false
+                                    )
+                                }
                             }
 
-                            // 合成每段音频并拼接
+                            // 按角色音色依次合成，拼成当前段落的连续音频
                             val audioBytes = java.io.ByteArrayOutputStream()
-                            for (seg in segments) {
-                                val chunk = engine.synthesize(seg, httpTts.voiceName, speed)
+                            for (seg in roleSegments) {
+                                val chunk = engine.synthesize(
+                                    seg.text,
+                                    seg.voice,
+                                    speed,
+                                    options = mapOf("emotion" to seg.emotion, "speaker" to seg.speaker)
+                                )
                                 audioBytes.write(chunk)
                             }
 

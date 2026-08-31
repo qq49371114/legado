@@ -56,7 +56,12 @@ data class HttpTTS(
     /** 音调范围 */
     var pitchRange: String? = null,
     /** 情感标签: cheerful/sad/angry/excited 等 (JSON数组) */
-    var emotionTags: String? = null
+    var emotionTags: String? = null,
+    /** 自动多人多角色朗读 */
+    @ColumnInfo(defaultValue = "0")
+    var multiRoleEnabled: Boolean = false,
+    /** 旁白音色 */
+    var narratorVoice: String? = null
 ) : BaseSource {
 
     override fun getTag(): String {
@@ -110,7 +115,15 @@ data class HttpTTS(
                     } ?: 0,
                     speedRange = doc.readString("$.speedRange"),
                     pitchRange = doc.readString("$.pitchRange"),
-                    emotionTags = doc.readString("$.emotionTags")
+                    emotionTags = doc.readString("$.emotionTags"),
+                    multiRoleEnabled = doc.read<Any?>("$.multiRoleEnabled")?.let {
+                        when (it) {
+                            is Boolean -> it
+                            is Number -> it.toInt() != 0
+                            else -> it.toString().toBoolean()
+                        }
+                    } ?: false,
+                    narratorVoice = doc.readString("$.narratorVoice")
                 )
             }
         }

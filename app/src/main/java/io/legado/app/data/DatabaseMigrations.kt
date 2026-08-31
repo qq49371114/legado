@@ -20,7 +20,7 @@ object DatabaseMigrations {
             migration_31_32, migration_32_33, migration_33_34, migration_34_35,
             migration_35_36, migration_36_37, migration_37_38, migration_38_39,
             migration_39_40, migration_40_41, migration_41_42, migration_42_43,
-            MIGRATION_71_72, MIGRATION_72_73
+            MIGRATION_71_72, MIGRATION_72_73, MIGRATION_73_74
         )
     }
 
@@ -414,6 +414,19 @@ object DatabaseMigrations {
                     arrayOf(voice, id)
                 )
             }
+        }
+    }
+
+    @Suppress("ClassName")
+    val MIGRATION_73_74 = object : Migration(73, 74) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN multiRoleEnabled INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE httpTTS ADD COLUMN narratorVoice TEXT")
+            db.execSQL(
+                """UPDATE httpTTS SET multiRoleEnabled = 1,
+                    narratorVoice = 'zh-CN-YunyangNeural'
+                   WHERE id BETWEEN -205 AND -200""".trimIndent()
+            )
         }
     }
 

@@ -84,6 +84,8 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
         binding.tvVoiceName.setText(httpTTS.voiceName)
         binding.tvApiFormat.setText(httpTTS.apiFormat)
         binding.swStreamMode.isChecked = httpTTS.streamMode
+        binding.swMultiRole.isChecked = httpTTS.multiRoleEnabled
+        binding.tvNarratorVoice.setText(httpTTS.narratorVoice ?: "zh-CN-YunyangNeural")
         binding.tvConcurrentRate.setText(httpTTS.concurrentRate)
         binding.tvLoginUrl.setText(httpTTS.loginUrl)
         binding.tvLoginUi.setText(httpTTS.loginUi)
@@ -152,7 +154,9 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
             maxCharLimit = original?.maxCharLimit ?: 0,
             speedRange = original?.speedRange,
             pitchRange = original?.pitchRange,
-            emotionTags = original?.emotionTags
+            emotionTags = original?.emotionTags,
+            multiRoleEnabled = binding.swMultiRole.isChecked,
+            narratorVoice = binding.tvNarratorVoice.text?.toString()?.trim()?.ifBlank { null }
         )
     }
 

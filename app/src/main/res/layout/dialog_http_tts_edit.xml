@@ -123,6 +123,24 @@
                     android:paddingVertical="8dp"
                     android:text="AI流式合成 (streamMode)" />
 
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/sw_multi_role"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingHorizontal="12dp"
+                    android:paddingVertical="8dp"
+                    android:text="自动多人多角色朗读" />
+
+                <io.legado.app.ui.widget.text.TextInputLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="旁白音色 (narratorVoice)">
+                    <io.legado.app.lib.theme.view.ThemeEditText
+                        android:id="@+id/tv_narrator_voice"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+                </io.legado.app.ui.widget.text.TextInputLayout>
+
                 <io.legado.app.ui.widget.text.TextInputLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

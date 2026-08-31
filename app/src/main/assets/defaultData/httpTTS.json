@@ -7,6 +7,8 @@
     "voiceName": "zh-CN-XiaoxiaoNeural",
     "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
     "streamMode": false,
+    "multiRoleEnabled": true,
+    "narratorVoice": "zh-CN-YunyangNeural",
     "speedRange": "0.5-2.0"
   },
   {
@@ -17,6 +19,8 @@
     "voiceName": "zh-CN-YunjianNeural",
     "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
     "streamMode": false,
+    "multiRoleEnabled": true,
+    "narratorVoice": "zh-CN-YunyangNeural",
     "speedRange": "0.5-2.0"
   },
   {
@@ -27,6 +31,8 @@
     "voiceName": "zh-CN-XiaoyiNeural",
     "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
     "streamMode": false,
+    "multiRoleEnabled": true,
+    "narratorVoice": "zh-CN-YunyangNeural",
     "speedRange": "0.5-2.0"
   },
   {
@@ -37,6 +43,8 @@
     "voiceName": "zh-CN-YunxiNeural",
     "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
     "streamMode": false,
+    "multiRoleEnabled": true,
+    "narratorVoice": "zh-CN-YunyangNeural",
     "speedRange": "0.5-2.0"
   },
   {
@@ -47,6 +55,8 @@
     "voiceName": "zh-CN-YunyangNeural",
     "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
     "streamMode": false,
+    "multiRoleEnabled": true,
+    "narratorVoice": "zh-CN-YunyangNeural",
     "speedRange": "0.5-2.0"
   },
   {
@@ -57,6 +67,8 @@
     "voiceName": "zh-CN-XiaohanNeural",
     "apiFormat": "audio-24khz-48kbitrate-mono-mp3",
     "streamMode": false,
+    "multiRoleEnabled": true,
+    "narratorVoice": "zh-CN-YunyangNeural",
     "speedRange": "0.5-2.0"
   },
   {
