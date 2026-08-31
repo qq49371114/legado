@@ -21,7 +21,7 @@ object DatabaseMigrations {
             migration_35_36, migration_36_37, migration_37_38, migration_38_39,
             migration_39_40, migration_40_41, migration_41_42, migration_42_43,
             MIGRATION_71_72, MIGRATION_72_73, MIGRATION_73_74, MIGRATION_74_75,
-            MIGRATION_75_76
+            MIGRATION_75_76, MIGRATION_76_77
         )
     }
 
@@ -451,6 +451,14 @@ object DatabaseMigrations {
                    WHERE id IN (-220, -221)""".trimIndent(),
                 arrayOf(loginUi)
             )
+        }
+    }
+
+    @Suppress("ClassName")
+    val MIGRATION_76_77 = object : Migration(76, 77) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // 旧版默认12%且素材响度低，升级到标准化素材后自动调整到可听的25%
+            db.execSQL("UPDATE httpTTS SET backgroundVolume = 25 WHERE backgroundVolume <= 12")
         }
     }
 

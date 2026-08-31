@@ -163,7 +163,7 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
             multiRoleEnabled = binding.swMultiRole.isChecked,
             narratorVoice = binding.tvNarratorVoice.text?.toString()?.trim()?.ifBlank { null },
             audioDramaEnabled = binding.swAudioDrama.isChecked,
-            backgroundVolume = binding.tvBackgroundVolume.text?.toString()?.toIntOrNull()?.coerceIn(0, 40) ?: 12,
+            backgroundVolume = binding.tvBackgroundVolume.text?.toString()?.toIntOrNull()?.coerceIn(0, 100) ?: 25,
             sceneHoldSeconds = binding.tvSceneHoldSeconds.text?.toString()?.toIntOrNull()?.coerceIn(10, 300) ?: 45,
             duckBackground = binding.swDuckBackground.isChecked
         )

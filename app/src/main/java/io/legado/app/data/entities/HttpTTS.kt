@@ -66,8 +66,8 @@ data class HttpTTS(
     @ColumnInfo(defaultValue = "0")
     var audioDramaEnabled: Boolean = false,
     /** 背景音量百分比 */
-    @ColumnInfo(defaultValue = "12")
-    var backgroundVolume: Int = 12,
+    @ColumnInfo(defaultValue = "25")
+    var backgroundVolume: Int = 25,
     /** 场景最短持续秒数 */
     @ColumnInfo(defaultValue = "45")
     var sceneHoldSeconds: Int = 45,
@@ -143,7 +143,7 @@ data class HttpTTS(
                             else -> it.toString().toBoolean()
                         }
                     } ?: false,
-                    backgroundVolume = doc.read<Any?>("$.backgroundVolume")?.toString()?.toIntOrNull() ?: 12,
+                    backgroundVolume = doc.read<Any?>("$.backgroundVolume")?.toString()?.toIntOrNull() ?: 25,
                     sceneHoldSeconds = doc.read<Any?>("$.sceneHoldSeconds")?.toString()?.toIntOrNull() ?: 45,
                     duckBackground = doc.read<Any?>("$.duckBackground")?.let {
                         when (it) {

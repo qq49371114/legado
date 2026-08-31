@@ -78,6 +78,13 @@ class HttpReadAloudService : BaseReadAloudService(),
         ExoPlayer.Builder(this).build().apply {
             repeatMode = Player.REPEAT_MODE_ONE
             addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_READY && !backgroundStartNotified) {
+                        backgroundStartNotified = true
+                        toastOnUi("背景音已启动：${backgroundScene.name}")
+                    }
+                }
+
                 override fun onPlayerError(error: PlaybackException) {
                     val message = "背景音播放失败: ${error.localizedMessage}"
                     AppLog.put(message, error)
@@ -89,6 +96,7 @@ class HttpReadAloudService : BaseReadAloudService(),
     }
     private var backgroundScene = StorySceneDetector.Scene.NONE
     private var backgroundChangedAt = 0L
+    private var backgroundStartNotified = false
     private var sceneDetector = StorySceneDetector()
     private var backgroundFadeJob: Job? = null
     private val ttsFolderPath: String by lazy {
@@ -166,6 +174,7 @@ class HttpReadAloudService : BaseReadAloudService(),
         backgroundPlayer.stop()
         backgroundScene = StorySceneDetector.Scene.NONE
         backgroundChangedAt = 0L
+        backgroundStartNotified = false
         sceneDetector.reset()
         playIndexJob?.cancel()
     }
@@ -817,7 +826,7 @@ class HttpReadAloudService : BaseReadAloudService(),
     }
 
     private fun sceneAudioFile(assetName: String): File {
-        val dir = File(cacheDir, "audio_scene").apply { mkdirs() }
+        val dir = File(cacheDir, "audio_scene_v2").apply { mkdirs() }
         val target = File(dir, assetName)
         if (!target.exists() || target.length() < 1024L) {
             assets.open("audio_scene/$assetName").use { input ->
@@ -854,8 +863,9 @@ class HttpReadAloudService : BaseReadAloudService(),
                 backgroundPlayer.volume = 0f
                 backgroundPlayer.prepare()
                 backgroundPlayer.playWhenReady = true
-                val configured = httpTts.backgroundVolume.coerceIn(0, 40) / 100f
-                val target = if (httpTts.duckBackground) configured * 0.65f else configured
+                val configured = httpTts.backgroundVolume.coerceIn(0, 100) / 100f
+                // 音频已统一响度标准化；duck仅轻微压低，避免再次低到听不见
+                val target = if (httpTts.duckBackground) configured * 0.82f else configured
                 backgroundFadeJob = lifecycleScope.launch {
                     repeat(12) { step ->
                         backgroundPlayer.volume = target * (step + 1) / 12f
