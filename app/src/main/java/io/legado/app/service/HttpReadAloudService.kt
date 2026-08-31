@@ -692,10 +692,26 @@ class HttpReadAloudService : BaseReadAloudService(),
                                 )
                             } catch (e: CancellationException) {
                                 throw e
-                            } catch (e: Exception) {
-                                throw NoStackTraceException(
-                                    "角色[${seg.speaker}] 音色[${seg.voice}]合成失败: ${e.localizedMessage}"
-                                )
+                            } catch (primaryError: Exception) {
+                                // 角色音色失效或临时不可用时，自动回退到默认音色，不中断整章朗读
+                                val fallbackVoice = httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural"
+                                if (seg.voice == fallbackVoice) {
+                                    throw NoStackTraceException(
+                                        "角色[${seg.speaker}] 音色[${seg.voice}]合成失败: ${primaryError.localizedMessage}"
+                                    )
+                                }
+                                try {
+                                    engine.synthesize(
+                                        seg.text,
+                                        fallbackVoice,
+                                        speed,
+                                        options = mapOf("emotion" to seg.emotion, "speaker" to seg.speaker)
+                                    )
+                                } catch (fallbackError: Exception) {
+                                    throw NoStackTraceException(
+                                        "角色[${seg.speaker}]音色失败且回退失败: ${fallbackError.localizedMessage}"
+                                    )
+                                }
                             }
                             if (!isPlayableAudio(bytes)) {
                                 throw NoStackTraceException(

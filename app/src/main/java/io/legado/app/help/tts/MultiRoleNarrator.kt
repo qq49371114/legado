@@ -17,15 +17,14 @@ class MultiRoleNarrator(
         val dialogue: Boolean
     )
 
+    // 2026-08 实测可用音色池；移除已返回NoAudioReceived的云枫/云野/晓涵/晓梦/晓双
     private val maleVoices = listOf(
-        "zh-CN-YunjianNeural", "zh-CN-YunxiNeural",
-        "zh-CN-YunfengNeural", "zh-CN-YunyeNeural"
+        "zh-CN-YunjianNeural", "zh-CN-YunxiNeural", "zh-CN-YunyangNeural"
     )
     private val femaleVoices = listOf(
-        "zh-CN-XiaoyiNeural", "zh-CN-XiaohanNeural",
-        "zh-CN-XiaomengNeural", "zh-CN-XiaoxuanNeural"
+        "zh-CN-XiaoyiNeural", "zh-CN-XiaoxuanNeural", "zh-CN-XiaoxiaoNeural"
     )
-    private val childVoices = listOf("zh-CN-YunxiaNeural", "zh-CN-XiaoshuangNeural")
+    private val childVoices = listOf("zh-CN-YunxiaNeural", "zh-CN-XiaoyiNeural")
     private val roleVoices = linkedMapOf<String, String>()
     private val recentSpeakers = ArrayDeque<String>()
     private var unknownTurn = 0
