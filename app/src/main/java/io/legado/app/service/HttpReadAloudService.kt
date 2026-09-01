@@ -126,6 +126,14 @@ class HttpReadAloudService : BaseReadAloudService(),
     override fun onCreate() {
         super.onCreate()
         exoPlayer.addListener(this)
+        // 明确初始化背景播放器：避免lazy延迟初始化导致的音频时序/焦点问题
+        backgroundPlayer.setAudioAttributes(
+            androidx.media3.common.AudioAttributes.Builder()
+                .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                .build(),
+            true
+        )
     }
 
     override fun onDestroy() {
@@ -866,9 +874,8 @@ class HttpReadAloudService : BaseReadAloudService(),
                 backgroundPlayer.volume = 0f
                 backgroundPlayer.prepare()
                 backgroundPlayer.playWhenReady = true
-                val configured = httpTts.backgroundVolume.coerceIn(0, 100) / 100f
-                // 音频已统一响度标准化；duck仅轻微压低，避免再次低到听不见
-                val target = if (httpTts.duckBackground) configured * 0.82f else configured
+                // 背景音量完全按用户设定播放，不做对白打折，确保能实际听到
+                val target = httpTts.backgroundVolume.coerceIn(0, 100) / 100f
                 backgroundFadeJob = lifecycleScope.launch {
                     repeat(12) { step ->
                         backgroundPlayer.volume = target * (step + 1) / 12f
