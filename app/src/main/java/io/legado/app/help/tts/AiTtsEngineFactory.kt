@@ -8,27 +8,21 @@ import io.legado.app.data.entities.HttpTTS
  */
 object AiTtsEngineFactory {
 
+    // 2026-09-02 逐个 WebSocket 实测通过的音色（其余已被微软下架，返回 Unsupported voice）。
+    // 列表里出现下架音色会导致用户选了却静默回退到主音色，表现为"旁白音色切换没反应"。
     private val edgeVoices by lazy {
         listOf(
-            AiTtsEngine.VoiceInfo("zh-CN-XiaoxiaoNeural", "晓晓", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaoyiNeural", "晓伊", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-YunjianNeural", "云健", "zh-CN", "Male"),
-            AiTtsEngine.VoiceInfo("zh-CN-YunxiNeural", "云希", "zh-CN", "Male"),
-            AiTtsEngine.VoiceInfo("zh-CN-YunyangNeural", "云扬", "zh-CN", "Male"),
-            AiTtsEngine.VoiceInfo("zh-CN-YunxiaNeural", "云夏", "zh-CN", "Male"),
-            AiTtsEngine.VoiceInfo("zh-CN-YunfengNeural", "云枫", "zh-CN", "Male"),
-            AiTtsEngine.VoiceInfo("zh-CN-YunhaoNeural", "云皓", "zh-CN", "Male"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaochenNeural", "晓辰", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaohanNeural", "晓涵", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaomengNeural", "晓梦", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaomoNeural", "晓墨", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaoqiuNeural", "晓秋", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaoruiNeural", "晓睿", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaoshuangNeural", "晓双", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaoxuanNeural", "晓萱", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaoyanNeural", "晓颜", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-XiaozhenNeural", "晓臻", "zh-CN", "Female"),
-            AiTtsEngine.VoiceInfo("zh-CN-YunyeNeural", "云野", "zh-CN", "Male")
+            AiTtsEngine.VoiceInfo("zh-CN-YunyangNeural", "云扬（男·沉稳播音）", "zh-CN", "Male"),
+            AiTtsEngine.VoiceInfo("zh-CN-YunjianNeural", "云健（男·浑厚有力）", "zh-CN", "Male"),
+            AiTtsEngine.VoiceInfo("zh-CN-YunxiNeural", "云希（男·清亮年轻）", "zh-CN", "Male"),
+            AiTtsEngine.VoiceInfo("zh-CN-YunxiaNeural", "云夏（男·少年童声）", "zh-CN", "Male"),
+            AiTtsEngine.VoiceInfo("zh-CN-XiaoxiaoNeural", "晓晓（女·温柔标准）", "zh-CN", "Female"),
+            AiTtsEngine.VoiceInfo("zh-CN-XiaoyiNeural", "晓伊（女·活泼少女）", "zh-CN", "Female"),
+            AiTtsEngine.VoiceInfo("zh-CN-XiaoxuanNeural", "晓萱（女·干练成熟）", "zh-CN", "Female"),
+            AiTtsEngine.VoiceInfo("zh-CN-liaoning-XiaobeiNeural", "晓北（女·东北话）", "zh-CN", "Female"),
+            AiTtsEngine.VoiceInfo("zh-CN-shaanxi-XiaoniNeural", "晓妮（女·陕西话）", "zh-CN", "Female"),
+            AiTtsEngine.VoiceInfo("zh-HK-HiuMaanNeural", "晓曼（女·粤语）", "zh-HK", "Female"),
+            AiTtsEngine.VoiceInfo("zh-TW-HsiaoChenNeural", "晓臻（女·台湾腔）", "zh-TW", "Female")
         )
     }
 

@@ -10,7 +10,10 @@ import io.legado.app.R
 import io.legado.app.base.BaseDialogFragment
 import io.legado.app.data.entities.HttpTTS
 import io.legado.app.databinding.DialogHttpTtsEditBinding
+import io.legado.app.help.tts.AiTtsEngine
+import io.legado.app.help.tts.AiTtsEngineFactory
 import io.legado.app.lib.dialogs.alert
+import io.legado.app.lib.dialogs.selector
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.ui.about.AppLogDialog
 import io.legado.app.ui.login.SourceLoginActivity
@@ -90,11 +93,33 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
         binding.tvBackgroundVolume.setText(httpTTS.backgroundVolume.toString())
         binding.tvSceneHoldSeconds.setText(httpTTS.sceneHoldSeconds.toString())
         binding.tvNarratorVoice.setText(httpTTS.narratorVoice ?: "zh-CN-YunyangNeural")
+        initVoicePickers()
         binding.tvConcurrentRate.setText(httpTTS.concurrentRate)
         binding.tvLoginUrl.setText(httpTTS.loginUrl)
         binding.tvLoginUi.setText(httpTTS.loginUi)
         binding.tvLoginCheckJs.setText(httpTTS.loginCheckJs)
         binding.tvHeaders.setText(httpTTS.header)
+    }
+
+    /**
+     * 音色改为点击弹窗选择。
+     * 手填音色ID极易敲错，且微软已下架大量音色，敲错后合成会静默回退到主音色，
+     * 表现为"旁白音色切换没反应"。这里只展示实测可用的音色。
+     */
+    private fun initVoicePickers() {
+        val voices = AiTtsEngineFactory.getVoices(AiTtsEngine.TYPE_EDGE)
+        if (voices.isEmpty()) return
+        val labels = voices.map { "${it.name}  ·  ${it.id}" }
+        binding.tvVoiceName.setOnClickListener {
+            context?.selector("选择主音色（角色默认声音）", labels) { _, i ->
+                binding.tvVoiceName.setText(voices[i].id)
+            }
+        }
+        binding.tvNarratorVoice.setOnClickListener {
+            context?.selector("选择旁白音色", labels) { _, i ->
+                binding.tvNarratorVoice.setText(voices[i].id)
+            }
+        }
     }
 
     override fun onMenuItemClick(item: MenuItem?): Boolean {
