@@ -99,6 +99,17 @@ class HttpReadAloudService : BaseReadAloudService(),
     private var backgroundStartNotified = false
     private var sceneDetector = StorySceneDetector()
     private var backgroundFadeJob: Job? = null
+
+    /** 当前实际在播的段落序号，-1 表示本章还没开始播 */
+    private var aiPlayingParagraph = -1
+    /** 本章多角色音频是否已全部合成完毕 */
+    private var aiSynthesisDone = true
+    /** 当前是否走多角色/有声剧播放队列 */
+    private var aiRoleMode = false
+    /** 多角色队列是否已经启动过播放 */
+    private var aiPlaybackStarted = false
+    /** 合成任务代号，避免被取消的旧任务把新任务标记为已完成 */
+    private var aiTaskGeneration = 0
     private val ttsFolderPath: String by lazy {
         cacheDir.absolutePath + File.separator + "httpTTS" + File.separator
     }
@@ -179,16 +190,17 @@ class HttpReadAloudService : BaseReadAloudService(),
 
     override fun playStop() {
         exoPlayer.stop()
-        backgroundPlayer.stop()
-        backgroundScene = StorySceneDetector.Scene.NONE
-        backgroundChangedAt = 0L
-        backgroundStartNotified = false
+        stopBackgroundAudio()
         sceneDetector.reset()
+        aiRoleMode = false
+        aiSynthesisDone = true
+        aiPlaybackStarted = false
+        aiPlayingParagraph = -1
         playIndexJob?.cancel()
     }
 
     private fun updateNextPos() {
-        readAloudNumber += contentList[nowSpeak].length + 1 - paragraphStartPos
+        readAloudNumber += (contentList.getOrNull(nowSpeak)?.length ?: 0) + 1 - paragraphStartPos
         paragraphStartPos = 0
         if (nowSpeak < contentList.lastIndex) {
             nowSpeak++
@@ -460,8 +472,8 @@ class HttpReadAloudService : BaseReadAloudService(),
             tts?.apiFormat ?: "mp3",
             tts?.multiRoleEnabled?.toString() ?: "false",
             tts?.narratorVoice ?: "",
-            tts?.audioDramaEnabled?.toString() ?: "false",
-            tts?.backgroundVolume?.toString() ?: "12",
+            // 背景音相关设置不影响语音内容，不能进缓存Key，
+            // 否则调一次背景音量就要把整章语音全部重新合成。
             speechRate.toString()
         ).joinToString("-|-" )
         return MD5Utils.md5Encode16(textChapter?.title ?: "") + "_" +
@@ -548,6 +560,10 @@ class HttpReadAloudService : BaseReadAloudService(),
             if (pageChanged) {
                 play()
             } else {
+                if (exoPlayer.playbackState == Player.STATE_IDLE && exoPlayer.mediaItemCount > 0) {
+                    // 从错误或停止状态恢复时必须重新 prepare，否则 play() 无效果。
+                    exoPlayer.prepare()
+                }
                 exoPlayer.play()
                 if (ReadAloud.httpTTS?.audioDramaEnabled == true && backgroundPlayer.mediaItemCount > 0) {
                     backgroundPlayer.play()
@@ -565,13 +581,13 @@ class HttpReadAloudService : BaseReadAloudService(),
             if (exoPlayer.duration <= 0) {
                 return@launch
             }
-            val speakTextLength = contentList[nowSpeak].length
+            val speakTextLength = contentList.getOrNull(nowSpeak)?.length ?: 0
             if (speakTextLength <= 0) {
                 return@launch
             }
             val sleep = exoPlayer.duration / speakTextLength
             val start = speakTextLength * exoPlayer.currentPosition / exoPlayer.duration
-            for (i in start..contentList[nowSpeak].length) {
+            for (i in start..speakTextLength) {
                 if (readAloudNumber + i > textChapter.getReadLength(pageIndex + 1)) {
                     pageIndex++
                     if (pageIndex < textChapter.pageSize) {
@@ -590,12 +606,24 @@ class HttpReadAloudService : BaseReadAloudService(),
     override fun upSpeechRate(reset: Boolean) {
         downloadTask?.cancel()
         exoPlayer.stop()
-        backgroundPlayer.stop()
-        backgroundPlayer.clearMediaItems()
-        backgroundScene = StorySceneDetector.Scene.NONE
-        backgroundChangedAt = 0L
+        stopBackgroundAudio()
+        aiRoleMode = false
+        aiSynthesisDone = true
+        aiPlaybackStarted = false
+        aiPlayingParagraph = -1
         speechRate = AppConfig.speechRatePlay + 5
-        if (AppConfig.streamReadAloudAudio) {
+        val httpTts = ReadAloud.httpTTS
+        // 调速后必须按引擎类型重新分派，否则AI引擎会掉回传统HTTP流程，
+        // 而AI预设的url为空，直接导致"朗读错误/合成失败"。
+        if (httpTts != null && AiTtsEngineFactory.isAiEngine(httpTts)) {
+            if (httpTts.engineType == io.legado.app.help.tts.AiTtsEngine.TYPE_EDGE) {
+                downloadAndPlayAudiosAi()
+            } else if (httpTts.streamMode) {
+                downloadAndPlayAudiosAiStream()
+            } else {
+                downloadAndPlayAudiosAi()
+            }
+        } else if (AppConfig.streamReadAloudAudio) {
             downloadAndPlayAudiosStream()
         } else {
             downloadAndPlayAudios()
@@ -623,15 +651,60 @@ class HttpReadAloudService : BaseReadAloudService(),
             Player.STATE_ENDED -> {
                 // 结束
                 playErrorNo = 0
-                backgroundPlayer.stop()
-                backgroundPlayer.clearMediaItems()
-                backgroundScene = StorySceneDetector.Scene.NONE
-                backgroundChangedAt = 0L
+                if (aiRoleMode) {
+                    // 多角色边合成边播放：队列播空不代表本章结束，
+                    // 可能只是播放追上了合成进度。必须等合成收尾后再判断跳章。
+                    checkAiChapterFinished()
+                    return
+                }
+                stopBackgroundAudio()
                 updateNextPos()
                 exoPlayer.stop()
                 exoPlayer.clearMediaItems()
             }
         }
+    }
+
+    /** 多角色模式下判断本章是否真的播完，播完才停背景并跳下一章。 */
+    private fun checkAiChapterFinished() {
+        if (!aiRoleMode) return
+        if (!aiSynthesisDone) return
+        if (exoPlayer.playbackState != Player.STATE_ENDED) return
+        if (!aiPlaybackStarted) return
+        aiRoleMode = false
+        stopBackgroundAudio()
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+        finishAiChapterAndGoNext()
+    }
+
+    /**
+     * 补齐本章剩余段落位移并跳下一章。
+     *
+     * 多角色模式会跳过空段落和合成失败段落，媒体项数量少于 contentList 段落数，
+     * 靠 onMediaItemTransition 累加的 nowSpeak 会停在末尾之前，
+     * 结果 updateNextPos 只是又加一段而不触发 nextChapter，表现为"只播一章就停"。
+     */
+    private fun finishAiChapterAndGoNext() {
+        if (contentList.isEmpty()) {
+            nextChapter()
+            return
+        }
+        var guard = 0
+        while (nowSpeak < contentList.lastIndex && guard++ <= contentList.size) {
+            updateNextPos()
+        }
+        // 此时 nowSpeak == lastIndex，updateNextPos 内部会调用 nextChapter()
+        updateNextPos()
+    }
+
+    private fun stopBackgroundAudio() {
+        backgroundFadeJob?.cancel()
+        backgroundPlayer.stop()
+        backgroundPlayer.clearMediaItems()
+        backgroundScene = StorySceneDetector.Scene.NONE
+        backgroundChangedAt = 0L
+        backgroundStartNotified = false
     }
 
     override fun onTimelineChanged(timeline: Timeline, reason: Int) {
@@ -660,10 +733,18 @@ class HttpReadAloudService : BaseReadAloudService(),
             if (httpTts?.audioDramaEnabled == true && scene != null && scene != StorySceneDetector.Scene.NONE) {
                 updateBackgroundScene(scene, httpTts)
             }
+            val paragraph = parts.getOrNull(1)?.toIntOrNull()
             // 首个媒体项以PLAYLIST_CHANGED进入，只启动背景，不推进正文。
-            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) return
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
+                if (paragraph != null) aiPlayingParagraph = paragraph
+                return
+            }
             // 同一段落后续角色切换不推进正文。
             if (parts.getOrNull(2) == "next") return
+            // 段落序号没有变化（例如首段被跳过后重新拉起播放）时不重复推进，
+            // 避免正文进度跑到音频前面导致后续段落被跳过。
+            if (paragraph != null && paragraph == aiPlayingParagraph) return
+            if (paragraph != null) aiPlayingParagraph = paragraph
         } else if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
             return
         }
@@ -673,7 +754,7 @@ class HttpReadAloudService : BaseReadAloudService(),
 
     override fun onPlayerError(error: PlaybackException) {
         super.onPlayerError(error)
-        AppLog.put("朗读错误\n${contentList[nowSpeak]}", error)
+        AppLog.put("朗读错误\n${contentList.getOrNull(nowSpeak).orEmpty()}", error)
         playErrorNo++
         if (playErrorNo >= 5) {
             toastOnUi("朗读连续5次错误, 最后一次错误代码(${error.localizedMessage})")
@@ -684,6 +765,10 @@ class HttpReadAloudService : BaseReadAloudService(),
                 exoPlayer.seekToNextMediaItem()
                 exoPlayer.playWhenReady = true
                 exoPlayer.prepare()
+            } else if (aiRoleMode && !aiSynthesisDone) {
+                // 多角色还在合成：坏掉的片段直接丢弃，等新片段到达后重新拉起，
+                // 不要在这里推进正文，否则后续段落会被跳过。
+                exoPlayer.clearMediaItems()
             } else {
                 exoPlayer.clearMediaItems()
                 updateNextPos()
@@ -709,6 +794,11 @@ class HttpReadAloudService : BaseReadAloudService(),
     private fun downloadAndPlayAudiosAi() {
         exoPlayer.clearMediaItems()
         downloadTask?.cancel()
+        aiRoleMode = true
+        aiSynthesisDone = false
+        aiPlaybackStarted = false
+        aiPlayingParagraph = -1
+        val generation = ++aiTaskGeneration
         downloadTask = execute {
             downloadTaskActiveLock.withLock {
                 ensureActive()
@@ -719,102 +809,125 @@ class HttpReadAloudService : BaseReadAloudService(),
                     narratorVoice = httpTts.narratorVoice ?: "zh-CN-YunyangNeural",
                     defaultVoice = httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural"
                 )
-                var playbackStarted = false
+                // nowSpeak 会随播放推进而增长，必须在开始合成前快照，
+                // 否则播放追上合成时后续段落会被 paragraphIndex < nowSpeak 误判跳过。
+                val startParagraph = nowSpeak
 
-                contentList.forEachIndexed { paragraphIndex, content ->
-                    ensureActive()
-                    if (paragraphIndex < nowSpeak) return@forEachIndexed
-                    val speakText = content.replace(AppPattern.notReadAloudRegex, "")
-                    if (speakText.isEmpty()) return@forEachIndexed
-
-                    val sceneName = if (httpTts.audioDramaEnabled) {
-                        // 无明显情节关键词时使用宁静底乐，确保开启有声剧后始终能听到背景
-                        sceneDetector.classify(speakText)
-                            .takeIf { it != StorySceneDetector.Scene.NONE }
-                            ?.name ?: StorySceneDetector.Scene.PEACEFUL.name
-                    } else {
-                        StorySceneDetector.Scene.NONE.name
-                    }
-
-                    val roleSegments = if (httpTts.multiRoleEnabled) {
-                        narrator.analyze(speakText)
-                    } else {
-                        SmartSegmenter.segment(
-                            speakText,
-                            httpTts.maxCharLimit.takeIf { it > 0 } ?: 5000
-                        ).map {
-                            MultiRoleNarrator.RoleSegment(
-                                it, "默认", httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
-                                SmartSegmenter.detectEmotion(it), false
-                            )
-                        }
-                    }
-
-                    roleSegments.forEachIndexed roleLoop@{ roleIndex, seg ->
+                try {
+                    contentList.forEachIndexed { paragraphIndex, content ->
                         ensureActive()
-                        val fileName = md5SpeakFileName(
-                            "role-v3|${seg.speaker}|${seg.voice}|${seg.emotion}|${seg.text}"
-                        )
-                        if (!hasSpeakFile(fileName)) {
-                            val fallbackVoices = linkedSetOf(
-                                seg.voice,
-                                httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
-                                "zh-CN-YunxiNeural",
-                                "zh-CN-XiaoyiNeural",
-                                "zh-CN-XiaoxiaoNeural"
-                            )
-                            var bytes: ByteArray? = null
-                            var lastError: Throwable? = null
-                            for (candidateVoice in fallbackVoices) {
-                                repeat(2) { attempt ->
-                                    if (bytes != null) return@repeat
-                                    try {
-                                        if (attempt > 0) delay(500L * (attempt + 1))
-                                        val result = engine.synthesize(
-                                            seg.text,
-                                            candidateVoice,
-                                            speed,
-                                            options = mapOf(
-                                                "emotion" to seg.emotion,
-                                                "speaker" to seg.speaker
-                                            )
-                                        )
-                                        if (isPlayableAudio(result)) bytes = result
-                                        else lastError = IllegalStateException("返回无效音频")
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Throwable) {
-                                        lastError = e
-                                    }
-                                }
-                                if (bytes != null) break
-                            }
-                            if (bytes == null) {
-                                // 单个角色片段失败不再终止整章，记录后跳过继续播放后续内容
-                                AppLog.put(
-                                    "跳过角色[${seg.speaker}]合成失败片段: ${lastError?.localizedMessage}",
-                                    lastError
-                                )
-                                return@roleLoop
-                            }
-                            getSpeakFileAsMd5(fileName).writeBytes(bytes!!)
+                        if (paragraphIndex < startParagraph) return@forEachIndexed
+                        val speakText = content.replace(AppPattern.notReadAloudRegex, "")
+                        if (speakText.isEmpty()) return@forEachIndexed
+
+                        val sceneName = if (httpTts.audioDramaEnabled) {
+                            // 无明显情节关键词时使用宁静底乐，确保开启有声剧后始终能听到背景
+                            sceneDetector.classify(speakText)
+                                .takeIf { it != StorySceneDetector.Scene.NONE }
+                                ?.name ?: StorySceneDetector.Scene.PEACEFUL.name
+                        } else {
+                            StorySceneDetector.Scene.NONE.name
                         }
 
-                        val isFirstRole = roleIndex == 0
-                        val mediaId = "ai-role:$paragraphIndex:${if (isFirstRole) "first" else "next"}:$sceneName"
-                        val mediaItem = MediaItem.Builder()
-                            .setMediaId(mediaId)
-                            .setUri(Uri.fromFile(getSpeakFileAsMd5(fileName)))
-                            .build()
-                        launch(Main) {
-                            exoPlayer.addMediaItem(mediaItem)
-                            // 第一小句生成完立即开播，不等待全段或整页合成。
-                            if (!playbackStarted) {
-                                playbackStarted = true
-                                exoPlayer.prepare()
-                                exoPlayer.playWhenReady = true
+                        val roleSegments = if (httpTts.multiRoleEnabled) {
+                            narrator.analyze(speakText)
+                        } else {
+                            SmartSegmenter.segment(
+                                speakText,
+                                httpTts.maxCharLimit.takeIf { it > 0 } ?: 5000
+                            ).map {
+                                MultiRoleNarrator.RoleSegment(
+                                    it, "默认", httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
+                                    SmartSegmenter.detectEmotion(it), false
+                                )
                             }
                         }
+
+                        roleSegments.forEachIndexed roleLoop@{ roleIndex, seg ->
+                            ensureActive()
+                            val fileName = md5SpeakFileName(
+                                "role-v3|${seg.speaker}|${seg.voice}|${seg.emotion}|${seg.text}"
+                            )
+                            if (!hasSpeakFile(fileName)) {
+                                val fallbackVoices = linkedSetOf(
+                                    seg.voice,
+                                    httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
+                                    "zh-CN-YunxiNeural",
+                                    "zh-CN-XiaoyiNeural",
+                                    "zh-CN-XiaoxiaoNeural"
+                                )
+                                var bytes: ByteArray? = null
+                                var lastError: Throwable? = null
+                                for (candidateVoice in fallbackVoices) {
+                                    repeat(2) { attempt ->
+                                        if (bytes != null) return@repeat
+                                        try {
+                                            if (attempt > 0) delay(500L * (attempt + 1))
+                                            val result = engine.synthesize(
+                                                seg.text,
+                                                candidateVoice,
+                                                speed,
+                                                options = mapOf(
+                                                    "emotion" to seg.emotion,
+                                                    "speaker" to seg.speaker
+                                                )
+                                            )
+                                            if (isPlayableAudio(result)) bytes = result
+                                            else lastError = IllegalStateException("返回无效音频")
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (e: Throwable) {
+                                            lastError = e
+                                        }
+                                    }
+                                    if (bytes != null) break
+                                }
+                                if (bytes == null) {
+                                    // 单个角色片段失败不再终止整章，记录后跳过继续播放后续内容
+                                    AppLog.put(
+                                        "跳过角色[${seg.speaker}]合成失败片段: ${lastError?.localizedMessage}",
+                                        lastError
+                                    )
+                                    return@roleLoop
+                                }
+                                getSpeakFileAsMd5(fileName).writeBytes(bytes!!)
+                            }
+
+                            val isFirstRole = roleIndex == 0
+                            val mediaId =
+                                "ai-role:$paragraphIndex:${if (isFirstRole) "first" else "next"}:$sceneName"
+                            val mediaItem = MediaItem.Builder()
+                                .setMediaId(mediaId)
+                                .setUri(Uri.fromFile(getSpeakFileAsMd5(fileName)))
+                                .build()
+                            launch(Main) {
+                                val stalled = aiPlaybackStarted &&
+                                    (exoPlayer.playbackState == Player.STATE_ENDED ||
+                                        exoPlayer.playbackState == Player.STATE_IDLE)
+                                exoPlayer.addMediaItem(mediaItem)
+                                // 第一小句生成完立即开播，不等待全段或整页合成。
+                                if (!aiPlaybackStarted) {
+                                    aiPlaybackStarted = true
+                                    exoPlayer.prepare()
+                                    exoPlayer.playWhenReady = true
+                                } else if (stalled) {
+                                    // 播放已追上合成进度而空转结束（或错误后被清空），
+                                    // 必须跳到新加入的片段重新拉起，否则本章剩余内容不会播，
+                                    // 表现为"只播一章就停"。
+                                    exoPlayer.seekTo(exoPlayer.mediaItemCount - 1, 0L)
+                                    exoPlayer.prepare()
+                                    exoPlayer.playWhenReady = true
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    // 无论正常结束还是异常，都要标记合成收尾，
+                    // 让 STATE_ENDED 能判断"本章真的播完了"而不是"在等合成"。
+                    // 用 lifecycleScope 而非当前协程：任务被取消时 launch 不会执行。
+                    if (generation == aiTaskGeneration) {
+                        aiSynthesisDone = true
+                        lifecycleScope.launch { checkAiChapterFinished() }
                     }
                 }
             }
@@ -897,6 +1010,10 @@ class HttpReadAloudService : BaseReadAloudService(),
     private fun downloadAndPlayAudiosAiStream() {
         exoPlayer.clearMediaItems()
         downloadTask?.cancel()
+        aiRoleMode = false
+        aiSynthesisDone = true
+        aiPlaybackStarted = false
+        aiPlayingParagraph = -1
         downloadTask = execute {
             downloadTaskActiveLock.withLock {
                 ensureActive()
