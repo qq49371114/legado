@@ -71,12 +71,28 @@ import kotlin.coroutines.coroutineContext
 class HttpReadAloudService : BaseReadAloudService(),
     Player.Listener {
     private val exoPlayer: ExoPlayer by lazy {
-        ExoPlayer.Builder(this).build()
+        ExoPlayer.Builder(this).build().apply {
+            // 后台播放必须持有 CPU+WiFi 唤醒锁，否则息屏进入 Doze 后
+            // 网络合成与播放会被系统挂起，表现为"播一会儿自动停止"。
+            setWakeMode(C.WAKE_MODE_NETWORK)
+            // 音频焦点由 BaseReadAloudService 统一申请，播放器不要再自己申请，
+            // 同一应用内重复申请会让服务收到 AUDIOFOCUS_LOSS 而自我暂停。
+            setAudioAttributes(audioAttributes(), false)
+        }
     }
+
+    private fun audioAttributes(): androidx.media3.common.AudioAttributes =
+        androidx.media3.common.AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+            .build()
+
     /** 有声剧背景播放器，与主语音播放器独立混音 */
     private val backgroundPlayer: ExoPlayer by lazy {
         ExoPlayer.Builder(this).build().apply {
             repeatMode = Player.REPEAT_MODE_ONE
+            // 背景音同样需要唤醒锁，且不参与音频焦点竞争
+            setWakeMode(C.WAKE_MODE_LOCAL)
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_READY && !backgroundStartNotified) {
@@ -137,13 +153,15 @@ class HttpReadAloudService : BaseReadAloudService(),
     override fun onCreate() {
         super.onCreate()
         exoPlayer.addListener(this)
-        // 明确初始化背景播放器：避免lazy延迟初始化导致的音频时序/焦点问题
+        // 明确初始化背景播放器：避免lazy延迟初始化导致的音频时序问题。
+        // handleAudioFocus 必须为 false —— 背景播放器若也去申请音频焦点，
+        // 会和语音播放器互抢，导致服务收到 AUDIOFOCUS_LOSS 后自我暂停。
         backgroundPlayer.setAudioAttributes(
             androidx.media3.common.AudioAttributes.Builder()
-                .setUsage(androidx.media3.common.C.USAGE_MEDIA)
-                .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build(),
-            true
+            false
         )
     }
 
@@ -205,7 +223,7 @@ class HttpReadAloudService : BaseReadAloudService(),
         if (nowSpeak < contentList.lastIndex) {
             nowSpeak++
         } else {
-            nextChapter()
+            autoNextChapter()
         }
     }
 
@@ -687,7 +705,7 @@ class HttpReadAloudService : BaseReadAloudService(),
      */
     private fun finishAiChapterAndGoNext() {
         if (contentList.isEmpty()) {
-            nextChapter()
+            autoNextChapter()
             return
         }
         var guard = 0

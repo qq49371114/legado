@@ -91,7 +91,9 @@ abstract class BaseReadAloudService : BaseService(),
 
     }
 
-    private val useWakeLock = appCtx.getPrefBoolean(PreferKey.readAloudWakeLock, false)
+    // AI有声剧/多角色朗读依赖后台长时间网络合成，唤醒锁默认开启，
+    // 否则息屏进入 Doze 后合成与播放会被系统挂起，出现"自动停止"。
+    private val useWakeLock = appCtx.getPrefBoolean(PreferKey.readAloudWakeLock, true)
     private val wakeLock by lazy {
         powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "legado:ReadAloudService")
             .apply {
@@ -414,6 +416,9 @@ abstract class BaseReadAloudService : BaseService(),
         }
         val requestFocus = MediaHelp.requestFocus(mFocusRequest)
         if (!requestFocus) {
+            // 抢不到焦点时标记待恢复，焦点回来能自动继续，
+            // 避免跳章瞬间抢不到焦点就彻底停住。
+            needResumeOnAudioFocusGain = true
             pauseReadAloud(false)
             toastOnUi("未获取到音频焦点")
         }
@@ -482,8 +487,14 @@ abstract class BaseReadAloudService : BaseService(),
             }
 
             AudioManager.AUDIOFOCUS_LOSS -> {
-                AppLog.put("音频焦点丢失,暂停朗读")
-                pauseReadAloud()
+                // 永久丢失焦点：不再直接放弃，标记为待恢复。
+                // 国产ROM后台常发通知音/语音助手抢焦点，旧逻辑会静默停掉朗读
+                // 并且永远不自动恢复，表现为"后台播一会儿就自动停止"。
+                AppLog.put("音频焦点丢失,暂停朗读并等待重新获得")
+                if (!pause) {
+                    needResumeOnAudioFocusGain = true
+                }
+                pauseReadAloud(false)
             }
 
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
@@ -621,6 +632,20 @@ abstract class BaseReadAloudService : BaseService(),
         if (!ReadBook.moveToNextChapter(true)) {
             stopSelf()
         }
+    }
+
+    /**
+     * 本章朗读自然结束后的自动跳章。
+     *
+     * 必须保持播放态：ReadBook.curPageChanged 里是 readAloud(!pause)，
+     * 若此时 pause 为 true，下一章只加载不朗读，表现为"只播一章就停"。
+     */
+    fun autoNextChapter() {
+        if (pause) {
+            AppLog.put("朗读自动跳章时处于暂停态,已恢复为播放态")
+            pause = false
+        }
+        nextChapter()
     }
 
     private fun initPhoneStateListener() {
