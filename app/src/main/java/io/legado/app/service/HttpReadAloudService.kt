@@ -833,9 +833,14 @@ class HttpReadAloudService : BaseReadAloudService(),
                 val engine = AiTtsEngineFactory.create(httpTts)
                 val speed = (AppConfig.speechRatePlay + 5) / 10.0f
                 val narratorVoiceName = httpTts.narratorVoice ?: "zh-CN-YunyangNeural"
+                // 角色档案按书持久化：书名+作者做键，换书自动隔离，同书跨章保持同一音色。
+                // 旧版没传 bookKey，每章 new 出来的 Narrator 档案全空，
+                // 同一个角色每章重新投一次音色 —— 这就是"角色声音一直在轮换"。
+                val bookKey = ReadBook.book?.let { "${it.name}|${it.author}" } ?: "unknown-book"
                 val narrator = MultiRoleNarrator(
                     narratorVoice = narratorVoiceName,
-                    defaultVoice = httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural"
+                    defaultVoice = httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
+                    bookKey = bookKey
                 )
                 // 明确回报实际生效的配置：用户反馈"旁白换不了"时可直接确认
                 // 究竟是设置没保存、还是保存了但播放读到旧值。
@@ -869,7 +874,7 @@ class HttpReadAloudService : BaseReadAloudService(),
                             "NONE"
                         }
 
-                        val roleSegments = if (httpTts.multiRoleEnabled) {
+                        val baseSegments = if (httpTts.multiRoleEnabled) {
                             narrator.analyze(speakText)
                         } else {
                             SmartSegmenter.segment(
@@ -883,11 +888,27 @@ class HttpReadAloudService : BaseReadAloudService(),
                             }
                         }
 
+                        // 情绪子句再切：Edge 免费端点实测拒绝 mstts:express-as / break /
+                        // emphasis，且一条 SSML 里超过 2 个 prosody 直接报 SSML is invalid，
+                        // 所以句内起伏只能靠"每个情绪子句发一次独立请求"实现。
+                        // 实测三个子句独立合成的基频分别是 328/178/126 Hz，差异非常明显；
+                        // 而写在一条 SSML 里是做不到的。
+                        val roleSegments = baseSegments.flatMap { seg ->
+                            val clauses = SmartSegmenter.emotionClauses(seg.text)
+                            if (clauses.size <= 1) {
+                                listOf(seg)
+                            } else {
+                                clauses.map { clause ->
+                                    seg.copy(text = clause.text, emotion = clause.emotion)
+                                }
+                            }
+                        }
+
                         val paragraphItems = mutableListOf<MediaItem>()
                         roleSegments.forEachIndexed roleLoop@{ roleIndex, seg ->
                             ensureActive()
                             val fileName = md5SpeakFileName(
-                                "role-v3|${seg.speaker}|${seg.voice}|${seg.emotion}|${seg.text}"
+                                "role-v4|${seg.speaker}|${seg.voice}|${seg.emotion}|${seg.text}"
                             )
                             if (!hasSpeakFile(fileName)) {
                                 val fallbackVoices = linkedSetOf(

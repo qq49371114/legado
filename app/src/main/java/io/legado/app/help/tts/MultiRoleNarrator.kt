@@ -9,10 +9,23 @@ package io.legado.app.help.tts
  *    （"娘笑道" → 说话人被识别成"娘笑"），导致称谓判性别彻底失效。
  * 2. 性别证据分三级：名字里的称谓 > 紧邻代词 > 上下文散落代词加权计分。
  *    旧版把整段代词一锅炖，"娘笑道…他放下柴刀"会把娘判成男声。
+ *
+ * 音色稳定性重构（2026-09-03，修"角色声音一直在轮换"）：
+ * 3. 角色档案改为按书持久化（ROLE_REGISTRY）。旧版每章都 new 一个
+ *    MultiRoleNarrator，roleVoices 随之清空，下一章同一个人重新算性别、
+ *    重新分配音色 —— 这是跨章换声的根因。
+ * 4. 名字变体归一（canonicalKey）。"李大爷"/"大爷"/"那李大爷" 旧版是三个
+ *    不同 key，hashCode 不同 → 三个音色。现在按包含关系归并到同一档案。
+ * 5. 音色一经分配只在"性别由未知升级为已知"时才改一次，其余任何情况都不动。
+ *    旧版 setGender 里无条件 roleVoices.remove()，每来一条新证据就重投一次。
+ * 6. 无名对话的交替改为段内局部交替，不再用全局计数器 —— 全局计数器会被
+ *    有名对话打乱相位，导致同一个人这句男声下句女声。
  */
 class MultiRoleNarrator(
     private val narratorVoice: String = "zh-CN-YunyangNeural",
-    private val defaultVoice: String = "zh-CN-XiaoxiaoNeural"
+    private val defaultVoice: String = "zh-CN-XiaoxiaoNeural",
+    /** 书籍标识：同一本书跨章共享角色档案，换书自动隔离 */
+    private val bookKey: String = ""
 ) {
 
     data class RoleSegment(
@@ -22,6 +35,9 @@ class MultiRoleNarrator(
         val emotion: String,
         val dialogue: Boolean
     )
+
+    /** 角色档案：性别 + 已分配音色，按书持久化 */
+    private data class RoleProfile(var gender: Gender, var voice: String?)
 
     // 2026-09-02 逐个 WebSocket 实测可用的音色；已下架音色会返回 Unsupported voice
     private val maleVoices = listOf(
@@ -34,12 +50,33 @@ class MultiRoleNarrator(
 
     private enum class Gender { MALE, FEMALE, CHILD, UNKNOWN }
 
-    private val roleVoices = linkedMapOf<String, String>()
-    private val roleGenders = linkedMapOf<String, Gender>()
+    /** 本书角色档案（跨章共享的那一份） */
+    private val roles: MutableMap<String, RoleProfile> = registryFor(bookKey)
+
     private val recentSpeakers = ArrayDeque<String>()
-    private var unknownTurn = 0
 
     private companion object {
+        /**
+         * 按书缓存的角色档案。朗读服务每章都会重建 Narrator，
+         * 档案必须活得比 Narrator 长，否则同一个角色每章换一次声音。
+         * 只保留最近 4 本书，避免长期占内存。
+         */
+        private val ROLE_REGISTRY = LinkedHashMap<String, MutableMap<String, RoleProfile>>()
+        private const val MAX_BOOKS_CACHED = 4
+
+        fun registryFor(bookKey: String): MutableMap<String, RoleProfile> {
+            synchronized(ROLE_REGISTRY) {
+                val existing = ROLE_REGISTRY.remove(bookKey)
+                val map = existing ?: linkedMapOf()
+                ROLE_REGISTRY[bookKey] = map          // 重新插入 = 标记为最近使用
+                while (ROLE_REGISTRY.size > MAX_BOOKS_CACHED) {
+                    val oldest = ROLE_REGISTRY.keys.firstOrNull() ?: break
+                    ROLE_REGISTRY.remove(oldest)
+                }
+                return map
+            }
+        }
+
         /** 说话动词，长词优先，避免"反问"被"问"截断 */
         val SPEAK_VERBS = listOf(
             "嘟囔", "反问", "回应", "低语", "接口", "开口", "应道",
@@ -107,6 +144,9 @@ class MultiRoleNarrator(
         }
 
         val result = mutableListOf<RoleSegment>()
+        // 段内无名对话的交替相位：只在本段内有效，不用全局计数器
+        var localTurn = 0
+
         learnGenderHints(text)
         var cursor = 0
         for ((index, match) in matches.withIndex()) {
@@ -124,7 +164,7 @@ class MultiRoleNarrator(
 
             val extracted = extractSpeaker(before, after)
             val speaker = when {
-                extracted == null -> inferUnknownSpeaker()
+                extracted == null -> inferUnknownSpeaker(localTurn++)
                 // 说话人写成代词（"他说"）时回溯本段最近出现的实名
                 extracted.pronoun -> resolvePronounSpeaker(before, extracted.name)
                 else -> extracted.name
@@ -190,7 +230,31 @@ class MultiRoleNarrator(
         if (speaker.isEmpty()) return null
         if (speaker in PRONOUNS) return Extracted(speaker, true)
         if (speaker == "旁白") return null
-        return speaker.takeIf { it.length in 1..12 }?.let { Extracted(it, false) }
+        return speaker.takeIf { it.length in 1..12 }
+            ?.let { Extracted(canonicalKey(it), false) }
+    }
+
+    /**
+     * 名字变体归一：把"大爷"/"李大爷"/"李大爷儿"合并到已登记的同一角色。
+     * 旧版不做归一，同一个人的不同称呼各自 hashCode，音色自然各不相同。
+     * 规则：与已知角色名互为前缀/后缀且公共部分 ≥2 字 → 视为同一人，
+     * 统一用更长的那个作为档案键（信息更完整）。
+     */
+    private fun canonicalKey(name: String): String {
+        if (name.length < 2) return name
+        if (roles.containsKey(name)) return name
+        val hit = roles.keys.firstOrNull { known ->
+            known.length >= 2 &&
+                (known.endsWith(name) || known.startsWith(name) ||
+                    name.endsWith(known) || name.startsWith(known))
+        } ?: return name
+        return if (name.length > hit.length) {
+            // 新名字更完整：把旧档案迁移到新键，避免两份档案各持一个音色
+            roles.remove(hit)?.let { roles[name] = it }
+            name
+        } else {
+            hit
+        }
     }
 
     /** "他说/她说"：回溯本段前文最近出现的实名，找不到就沿用最近说话人 */
@@ -199,24 +263,25 @@ class MultiRoleNarrator(
             .findAll(before)
             .map { it.value }
             .lastOrNull { it !in PRONOUNS }
-        if (candidate != null) return candidate
+        if (candidate != null) return canonicalKey(candidate)
         val expectFemale = pronoun == "她"
         val known = recentSpeakers.lastOrNull { speaker ->
-            val g = roleGenders[speaker]
+            val g = roles[speaker]?.gender
             if (expectFemale) g == Gender.FEMALE else g == Gender.MALE
         }
         return known ?: recentSpeakers.lastOrNull() ?: pronoun
     }
 
-    /** 无名称连续对话：优先在最近两个明确角色间交替 */
-    private fun inferUnknownSpeaker(): String {
+    /**
+     * 无名称连续对话：在最近两个明确角色间交替。
+     * turn 由调用方按"本段第几个无名引号"传入 —— 段内交替是对的，
+     * 但绝不能用跨段全局计数器，否则有名对话会把相位打乱，
+     * 表现出来就是同一个角色上一句男声下一句女声。
+     */
+    private fun inferUnknownSpeaker(turn: Int): String {
         val candidates = recentSpeakers.distinct().takeLast(2)
-        if (candidates.size == 2) {
-            val speaker = candidates[unknownTurn % 2]
-            unknownTurn++
-            return speaker
-        }
-        return "角色${(unknownTurn++ % 4) + 1}"
+        if (candidates.size == 2) return candidates[turn % 2]
+        return candidates.lastOrNull() ?: "角色1"
     }
 
     private fun rememberSpeaker(speaker: String) {
@@ -225,11 +290,24 @@ class MultiRoleNarrator(
         while (recentSpeakers.size > 6) recentSpeakers.removeFirst()
     }
 
-    /** 从整段叙述中持续学习"角色名 + 性别代词/称谓"，一旦明确后固定。 */
+    /**
+     * 从整段叙述中学习"角色名 + 性别代词/称谓"。
+     *
+     * 旧版用 Regex("[\u4e00-\u9fa5·]{2,6}") 把整段切成任意 6 字块当"名字"，
+     * 切出来的是"张三笑道""起来笑得"这类垃圾，真正的说话人反而不在集合里，
+     * 等于白跑一遍还污染档案。现在只对已登记角色和本段抽出的说话人做学习。
+     */
     private fun learnGenderHints(text: String) {
-        val names = Regex("[\\u4e00-\\u9fa5·]{2,6}").findAll(text).map { it.value }.toSet()
+        val names = LinkedHashSet<String>()
+        names += roles.keys
+        names += recentSpeakers
+        // 本段内出现的"名字+说话动词"，取动词前的 2-4 字
+        Regex("""([\p{IsHan}]{2,4})(?:${SPEAK_VERBS.joinToString("|")})(?:道)?[：:，,]""")
+            .findAll(text)
+            .forEach { names += it.groupValues[1] }
+
         names.forEach { name ->
-            if (name in PRONOUNS) return@forEach
+            if (name.isBlank() || name in PRONOUNS || name == "旁白") return@forEach
             titleGender(name)?.let {
                 setGender(name, it)
                 return@forEach
@@ -255,13 +333,23 @@ class MultiRoleNarrator(
         }
     }
 
+    /**
+     * 写入性别。只允许"未知 → 已知"这一次升级，且仅在这种情况下才丢弃已分配音色。
+     * 旧版每次 setGender 都无条件 roleVoices.remove()，一段话里出现几次新证据
+     * 就重投几次音色 —— 这是段内换声的直接原因。
+     */
     private fun setGender(speaker: String, gender: Gender) {
         if (gender == Gender.UNKNOWN) return
-        val previous = roleGenders[speaker]
-        if (previous == null || previous == Gender.UNKNOWN) {
-            roleGenders[speaker] = gender
-            roleVoices.remove(speaker) // 新证据出现时重新分配正确音色
+        val profile = roles[speaker]
+        if (profile == null) {
+            roles[speaker] = RoleProfile(gender, null)
+            return
         }
+        if (profile.gender == Gender.UNKNOWN) {
+            profile.gender = gender
+            profile.voice = null      // 仅此一次：性别刚确定，重投一次正确音色
+        }
+        // 已有明确性别：任何新证据都不再改动，宁可错一个也不要来回换声
     }
 
     /**
@@ -287,7 +375,7 @@ class MultiRoleNarrator(
         after: String,
         pronoun: String?
     ): Gender {
-        roleGenders[speaker]?.takeIf { it != Gender.UNKNOWN }?.let { return it }
+        roles[speaker]?.gender?.takeIf { it != Gender.UNKNOWN }?.let { return it }
         titleGender(speaker)?.let {
             setGender(speaker, it)
             return it
@@ -314,23 +402,38 @@ class MultiRoleNarrator(
         }.also { if (it != Gender.UNKNOWN) setGender(speaker, it) }
     }
 
+    /**
+     * 取角色音色。档案里已有就直接用，永不重算 —— 这是"声音固定"的关键。
+     * 只有当档案不存在、或性别刚从未知升级为已知时才会走到分配逻辑。
+     */
     private fun voiceFor(
         speaker: String,
         before: String,
         after: String,
         pronoun: String?
     ): String {
-        roleVoices[speaker]?.let { return it }
-        val pool = when (detectGender(speaker, before, after, pronoun)) {
+        roles[speaker]?.voice?.let { return it }
+        val gender = detectGender(speaker, before, after, pronoun)
+        val pool = when (gender) {
             Gender.CHILD -> childVoices
             Gender.FEMALE -> femaleVoices
             Gender.MALE -> maleVoices
             // 性别不确定时用中性男声，杜绝男性角色被随机分到女声
             Gender.UNKNOWN -> maleVoices
         }
-        val index = Math.floorMod(speaker.hashCode(), pool.size)
+        // 用名字的稳定哈希取池内下标：同名同书永远拿到同一个音色。
+        // String.hashCode 在 JVM 上有规范定义，跨进程稳定，可以放心用。
+        val index = Math.floorMod(stableHash(speaker), pool.size)
         val voice = pool[index].ifBlank { defaultVoice }
-        roleVoices[speaker] = voice
+        val profile = roles.getOrPut(speaker) { RoleProfile(gender, null) }
+        profile.voice = voice
         return voice
+    }
+
+    /** 与 String.hashCode 同算法，显式写出以强调"必须稳定" */
+    private fun stableHash(s: String): Int {
+        var h = 0
+        for (c in s) h = 31 * h + c.code
+        return h
     }
 }

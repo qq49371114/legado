@@ -9,6 +9,18 @@ import java.util.regex.Pattern
  * 2. 合并过短句、拆分过长段
  * 3. 保留对话引号完整性
  * 4. 自动情感标注（给支持SSML的引擎用）
+ *
+ * 情感标注重构（2026-09-03）：
+ * 旧版对整段只给一个情感标签，且关键词表里混进了"打""气""杀"这种
+ * 在中文里极高频的普通字（"打开""天气""杀青"都会命中），导致绝大多数
+ * 段落被误判成 angry，再叠加只有 ±7% 的微弱 prosody，听起来就是平读背书。
+ *
+ * 新版：
+ * - 关键词收紧为真正表达情绪的词/词组，去掉单字高频误命中项
+ * - 新增 laugh / cry / shout / whisper 四个强表现力标签
+ * - 提供 emotionClauses()：把一段话按情绪切成子句，每个子句独立合成，
+ *   这是 Edge 免费端点上唯一能做出句内情绪起伏的手段
+ *   （实测 mstts:express-as / break / emphasis 全被拒，>2 段 prosody 也被拒）
  */
 object SmartSegmenter {
 
@@ -18,15 +30,21 @@ object SmartSegmenter {
     /** 段落结束标点 */
     private val paragraphEnd = charArrayOf('\n', '\r')
 
-    /** 引号 */
-    private val openQuotes = charArrayOf('"', '"', '"', '「')
-    private val closeQuotes = charArrayOf('"', '"', '"', '」')
+    /** 引号：开闭必须按同一索引成对，原版三项都写成了同一个 ASCII 双引号 */
+    private val openQuotes = charArrayOf('“', '「', '『', '"')
+    private val closeQuotes = charArrayOf('”', '」', '』', '"')
 
     /** 单段最大字符数 */
     private const val MAX_SEGMENT_LENGTH = 500
 
     /** 单段最小字符数（低于此合并到上一段） */
     private const val MIN_SEGMENT_LENGTH = 10
+
+    /** 情绪子句最短长度：太短会造成大量微小请求，得不偿失 */
+    private const val MIN_CLAUSE_LENGTH = 5
+
+    /** 一段话最多切成几个情绪子句，防止请求数爆炸 */
+    private const val MAX_CLAUSES_PER_SEGMENT = 4
 
     /**
      * 按语义智能分段
@@ -118,40 +136,171 @@ object SmartSegmenter {
         return openCount <= 0
     }
 
+    // ---------------------------------------------------------------- 情感
+
+    /** 情绪子句：文本 + 该子句独有的情绪标签 */
+    data class Clause(val text: String, val emotion: String)
+
+    /** 拟声笑：命中就必须夸张处理，否则"哈哈大笑"会被平平背出来 */
+    private val laughWords = listOf(
+        "哈哈", "呵呵", "嘿嘿", "嘻嘻", "咯咯", "哈！", "大笑", "狂笑",
+        "爆笑", "捧腹", "笑得", "笑起来", "笑出声"
+    )
+
+    /** 哭腔：语速与音高都要明显压下去 */
+    private val cryWords = listOf(
+        "呜呜", "哇哇", "泣不成声", "痛哭", "大哭", "抽泣", "哽咽",
+        "涕泪", "哭喊", "哭着", "哭起来", "眼泪", "泪水", "泪流"
+    )
+
+    /** 喊叫：音量拉满 */
+    private val shoutWords = listOf(
+        "大喊", "大叫", "呐喊", "咆哮", "怒吼", "吼道", "嘶喊", "厉喝",
+        "喝道", "尖叫", "high声", "高呼", "喊道"
+    )
+
+    /** 低语：压音量、放慢 */
+    private val whisperWords = listOf(
+        "低声", "轻声", "喃喃", "低语", "耳语", "嘟囔", "小声", "悄声",
+        "自言自语", "细声"
+    )
+
+    /** 悲伤：去掉了"哭""泪"（归入 cry），保留情绪描述词 */
+    private val sadWords = listOf(
+        "悲伤", "痛苦", "伤心", "难过", "绝望", "心痛", "悲哀", "哀伤",
+        "悲凉", "凄然", "黯然", "神伤", "苦涩", "叹息", "叹了口气", "无奈"
+    )
+
+    /** 愤怒：全部改成双字以上词组，杜绝"打""气""杀"单字误命中 */
+    private val angryWords = listOf(
+        "愤怒", "暴怒", "怒火", "怒斥", "怒喝", "恼怒", "气愤", "愤慨",
+        "混蛋", "该死", "可恶", "放肆", "无耻", "住口", "滚开", "找死",
+        "咬牙", "切齿", "脸色铁青", "拍案", "怒目"
+    )
+
+    /** 恐惧/悬疑 */
+    private val fearWords = listOf(
+        "害怕", "恐惧", "惊恐", "颤抖", "冷汗", "诡异", "阴森", "不安",
+        "心跳如鼓", "毛骨悚然", "胆寒", "惊骇", "骇然", "战栗"
+    )
+
+    /** 欢快：去掉单字"笑"（归入 laugh 判定），保留明确情绪词 */
+    private val happyWords = listOf(
+        "开心", "快乐", "高兴", "欣喜", "喜悦", "欢呼", "雀跃", "兴高采烈",
+        "眉开眼笑", "喜出望外", "乐不可支", "微笑", "莞尔"
+    )
+
+    /** 兴奋 */
+    private val excitedWords = listOf(
+        "兴奋", "激动", "热血", "沸腾", "振奋", "亢奋", "迫不及待"
+    )
+
     /**
      * 自动情感标注
-     * 根据标点符号和关键词推断语气
+     * 优先级：强表现力拟声（笑/哭/喊/低语）> 明确情绪词 > 标点强度 > neutral
      *
-     * @param text 段落文本
-     * @return 情感标签: cheerful/sad/angry/excited/friendly/neutral
+     * @return laugh/cry/shout/whisper/excited/cheerful/angry/sad/fearful/friendly/neutral
      */
     fun detectEmotion(text: String): String {
-        // 感叹号多 → excited/cheerful
+        if (text.isBlank()) return "neutral"
+
+        // 1. 强表现力拟声词：最优先，这是"有感情"最直观的来源
+        if (laughWords.any { text.contains(it) }) return "laugh"
+        if (cryWords.any { text.contains(it) }) return "cry"
+        if (shoutWords.any { text.contains(it) }) return "shout"
+        if (whisperWords.any { text.contains(it) }) return "whisper"
+
+        // 2. 明确情绪词组
+        if (angryWords.any { text.contains(it) }) return "angry"
+        if (sadWords.any { text.contains(it) }) return "sad"
+        if (fearWords.any { text.contains(it) }) return "fearful"
+        if (excitedWords.any { text.contains(it) }) return "excited"
+        if (happyWords.any { text.contains(it) }) return "cheerful"
+
+        // 3. 标点强度（放在词表之后，避免"！"把明确情绪盖掉）
         val exclamCount = text.count { it == '！' || it == '!' }
-        if (exclamCount >= 3) return "excited"
-        if (exclamCount >= 1) return "cheerful"
-
-        // 问号多 → 思考语气（用 friendly 模拟）
+        if (exclamCount >= 2) return "excited"
+        if (exclamCount == 1) return "cheerful"
         val questionCount = text.count { it == '？' || it == '?' }
-        if (questionCount >= 2) return "friendly"
-
-        // 悲伤关键词
-        val sadKeywords = listOf("哭", "泪", "悲伤", "痛苦", "伤心", "难过", "绝望", "心痛", "悲哀", "哀伤")
-        if (sadKeywords.any { text.contains(it) }) return "sad"
-
-        // 愤怒关键词
-        val angryKeywords = listOf("怒", "气", "愤", "混蛋", "该死", "可恶", "滚", "杀", "打", "骂", "吼", "咆哮", "怒斥", "怒火", "暴怒")
-        if (angryKeywords.any { text.contains(it) }) return "angry"
-
-        // 恐惧/悬疑关键词
-        val fearKeywords = listOf("害怕", "恐惧", "惊恐", "颤抖", "冷汗", "诡异", "阴森", "危险", "不安", "心跳")
-        if (fearKeywords.any { text.contains(it) }) return "fearful"
-
-        // 欢快关键词
-        val happyKeywords = listOf("笑", "开心", "快乐", "高兴", "兴奋", "哈哈", "嘻嘻", "嘿嘿", "微笑", "欢呼", "喜悦")
-        if (happyKeywords.any { text.contains(it) }) return "cheerful"
+        if (questionCount >= 1) return "friendly"
 
         return "neutral"
+    }
+
+    /** 强表现力标签：这些子句值得单独发一次合成请求 */
+    private val strongEmotions = setOf("laugh", "cry", "shout", "whisper", "angry", "excited")
+
+    /**
+     * 把一段话按情绪切成子句，每个子句可独立合成。
+     *
+     * 为什么必须这么做：Edge 免费消费端点实测拒绝 mstts:express-as、break、
+     * emphasis，并且一个 SSML 里超过 2 个 prosody 就直接返回 SSML is invalid。
+     * 也就是说"一次请求内做句内起伏"这条路是死的。唯一可行的是把
+     * "他/哈哈大笑/起来笑得直不起腰"这样的子句拆成独立请求，各自带自己的
+     * prosody —— 实测三段独立请求的基频分别是 328/178/126 Hz，差异非常明显。
+     *
+     * 为了不让请求数爆炸，只在"子句情绪 ≠ 整段主情绪且属于强表现力标签"时才切，
+     * 相邻同情绪子句会被合并，最多切 MAX_CLAUSES_PER_SEGMENT 段。
+     */
+    fun emotionClauses(text: String): List<Clause> {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return emptyList()
+        val whole = detectEmotion(trimmed)
+        // 短句不值得再切
+        if (trimmed.length < MIN_CLAUSE_LENGTH * 2) return listOf(Clause(trimmed, whole))
+
+        val pieces = splitByPunctuation(trimmed)
+        if (pieces.size <= 1) return listOf(Clause(trimmed, whole))
+
+        // 逐子句标注。子句自己的强情绪最优先；平叙子句必须保持 neutral 平读，
+        // 绝不能被整段的强情绪染色 —— 否则"他点了点头，忽然哈哈大笑起来"
+        // 会整句都按大笑夸张读，等于没有起伏，仍然是背书。
+        val tagged = pieces.map { piece ->
+            val e = detectEmotion(piece)
+            val emotion = when {
+                e in strongEmotions -> e          // 子句本身有强情绪 → 用自己的
+                whole in strongEmotions -> e      // 整段强情绪但本子句平淡 → 保持平淡
+                else -> whole                     // 整段也无强情绪 → 跟随整段
+            }
+            Clause(piece, emotion)
+        }
+
+        // 相邻同情绪合并 + 过短片段并入邻居
+        val merged = mutableListOf<Clause>()
+        for (c in tagged) {
+            val last = merged.lastOrNull()
+            when {
+                last == null -> merged.add(c)
+                last.emotion == c.emotion ->
+                    merged[merged.lastIndex] = Clause(last.text + c.text, last.emotion)
+                c.text.length < MIN_CLAUSE_LENGTH ->
+                    merged[merged.lastIndex] = Clause(last.text + c.text, last.emotion)
+                last.text.length < MIN_CLAUSE_LENGTH ->
+                    // 前一片太短，让它跟着后面这句的情绪走
+                    merged[merged.lastIndex] = Clause(last.text + c.text, c.emotion)
+                else -> merged.add(c)
+            }
+        }
+
+        // 超过上限就退回整段单一情绪，避免一段话打十几个请求
+        if (merged.size > MAX_CLAUSES_PER_SEGMENT) return listOf(Clause(trimmed, whole))
+        return merged.filter { it.text.isNotBlank() }
+    }
+
+    /** 在逗号/分号/句末标点后切分，标点保留在前一片 */
+    private fun splitByPunctuation(text: String): List<String> {
+        val cuts = charArrayOf('，', ',', '。', '！', '!', '？', '?', '；', ';', '…')
+        val out = mutableListOf<String>()
+        val sb = StringBuilder()
+        for (c in text) {
+            sb.append(c)
+            if (c in cuts) {
+                out.add(sb.toString())
+                sb.setLength(0)
+            }
+        }
+        if (sb.isNotEmpty()) out.add(sb.toString())
+        return out.filter { it.isNotBlank() }
     }
 
     /**

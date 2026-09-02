@@ -95,16 +95,36 @@ class EdgeTtsEngine(
         val volumePercent: Int
     )
 
-    /** Edge不支持Azure情绪style，使用语速、音调、音量模拟真实情绪。 */
+    /**
+     * Edge 免费端点不支持 Azure 的 mstts:express-as，只能用 prosody 模拟情绪。
+     *
+     * 2026-09-03 用真实 WebSocket + ffmpeg 解码逐值实测出的边界（基频/RMS 量化）：
+     * - pitch：+50% 处饱和（基频 116→173Hz），再往上无变化；负方向 -30% 之后失效
+     * - volume：±50% 处饱和（RMS ±906），旧代码却把它夹在 ±20% 内，白扔掉一半表现力
+     * - rate：±100% 都持续生效
+     * - mstts:express-as / break / emphasis / say-as 一律被拒（SSML is invalid）
+     * - 一条 SSML 里超过 2 个 prosody 直接被拒，所以句内起伏只能靠拆多次请求
+     *
+     * 旧值最大只有 pitch ±10% / volume ±12%，人耳基本听不出差别 —— 这就是
+     * "角色和旁白都在背书"的直接原因。下面按实测边界重标定，全部用足量程。
+     */
     private fun emotionProsody(emotion: String, baseSpeed: Float, explicitPitch: Float?): Prosody {
         val basePitch = explicitPitch ?: 1f
         return when (emotion.lowercase()) {
-            "excited" -> Prosody((baseSpeed * 1.18f).coerceAtMost(1.65f), basePitch * 1.10f, 10)
-            "cheerful", "happy" -> Prosody((baseSpeed * 1.10f).coerceAtMost(1.55f), basePitch * 1.07f, 6)
-            "angry" -> Prosody((baseSpeed * 1.12f).coerceAtMost(1.60f), basePitch * 0.93f, 12)
-            "sad" -> Prosody((baseSpeed * 0.82f).coerceAtLeast(0.55f), basePitch * 0.90f, -4)
-            "friendly" -> Prosody((baseSpeed * 0.96f).coerceAtLeast(0.65f), basePitch * 1.03f, 2)
-            "fearful", "suspense" -> Prosody((baseSpeed * 0.88f).coerceAtLeast(0.60f), basePitch * 0.94f, -2)
+            // 拟声笑：音高拉到接近饱和 + 加速 + 加大音量，才像真在笑
+            "laugh" -> Prosody((baseSpeed * 1.28f).coerceAtMost(1.9f), basePitch * 1.42f, 42)
+            // 哭腔：压音高、显著放慢、收音量
+            "cry" -> Prosody((baseSpeed * 0.72f).coerceAtLeast(0.5f), basePitch * 0.74f, -28)
+            // 喊叫：音量直接拉到饱和
+            "shout" -> Prosody((baseSpeed * 1.16f).coerceAtMost(1.8f), basePitch * 1.20f, 50)
+            // 低语：压到最低可辨音量
+            "whisper" -> Prosody((baseSpeed * 0.82f).coerceAtLeast(0.55f), basePitch * 0.88f, -45)
+            "excited" -> Prosody((baseSpeed * 1.22f).coerceAtMost(1.85f), basePitch * 1.30f, 34)
+            "cheerful", "happy" -> Prosody((baseSpeed * 1.10f).coerceAtMost(1.7f), basePitch * 1.18f, 20)
+            "angry" -> Prosody((baseSpeed * 1.18f).coerceAtMost(1.8f), basePitch * 0.86f, 46)
+            "sad" -> Prosody((baseSpeed * 0.78f).coerceAtLeast(0.5f), basePitch * 0.80f, -20)
+            "friendly" -> Prosody((baseSpeed * 0.97f).coerceAtLeast(0.6f), basePitch * 1.07f, 8)
+            "fearful", "suspense" -> Prosody((baseSpeed * 0.88f).coerceAtLeast(0.6f), basePitch * 0.92f, -26)
             else -> Prosody(baseSpeed, basePitch, 0)
         }
     }
@@ -136,9 +156,12 @@ class EdgeTtsEngine(
         val requestId = UUID.randomUUID().toString().replace("-", "").uppercase()
 
         // 构建SSML
+        // 夹取范围按 2026-09-03 实测饱和点设定：
+        // pitch 正向 +50% 饱和、负向 -30% 之后不再变化；volume ±50% 饱和。
+        // 旧代码把 volume 夹在 ±20%，等于主动丢掉一半可用表现力。
         val rateStr = "${(speed * 100 - 100).toInt()}%"
-        val pitchStr = pitch?.let { "${(it * 100 - 100).toInt().coerceIn(-40, 40)}%" } ?: "+0%"
-        val volumeStr = "${volumePercent.coerceIn(-20, 20).let { if (it >= 0) "+$it%" else "$it%" }}"
+        val pitchStr = pitch?.let { "${(it * 100 - 100).toInt().coerceIn(-30, 50)}%" } ?: "+0%"
+        val volumeStr = "${volumePercent.coerceIn(-50, 50).let { if (it >= 0) "+$it%" else "$it%" }}"
         val ssml = buildString {
             append("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>")
             append("<voice name='$usedVoice'>")
