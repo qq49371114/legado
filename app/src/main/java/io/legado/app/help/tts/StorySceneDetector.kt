@@ -8,6 +8,36 @@ class StorySceneDetector(
 ) {
     enum class Scene { NONE, PEACEFUL, RAIN, FOREST, BATTLE, SUSPENSE, ROMANCE, SAD }
 
+
+    enum class Effect(val assetName: String) {
+        DOOR_SLAM("door_slam.wav"),
+        THUNDER("thunder.wav"),
+        RAIN("rain_burst.wav"),
+        WIND("wind.wav"),
+        KNOCK("knock.wav"),
+        FOOTSTEP("footstep.wav"),
+        SWORD("sword.wav"),
+        EXPLOSION("explosion.wav")
+    }
+
+    private val effectKeywords = mapOf(
+        Effect.DOOR_SLAM to listOf("砰", "嘭", "关门", "摔门", "门重重", "一声巨响", "撞门", "踹开门"),
+        Effect.THUNDER to listOf("雷鸣", "惊雷", "炸雷", "轰隆", "雷声", "电闪雷鸣"),
+        Effect.RAIN to listOf("下雨", "暴雨", "大雨", "雨幕", "倾盆", "狂风暴雨", "雨点", "雨声"),
+        Effect.WIND to listOf("狂风", "风声", "呼啸", "寒风", "大风", "风刮", "风暴"),
+        Effect.KNOCK to listOf("敲门", "叩门", "咚咚", "扣门"),
+        Effect.FOOTSTEP to listOf("脚步声", "脚步", "走廊传来", "踩在", "靠近"),
+        Effect.SWORD to listOf("拔剑", "剑鸣", "刀光", "刀剑", "铿锵", "兵刃", "剑气"),
+        Effect.EXPLOSION to listOf("爆炸", "炸开", "轰然", "轰的一声", "炸裂")
+    )
+
+    fun detectEffect(text: String): Effect? {
+        val scores = effectKeywords.mapValues { (_, words) ->
+            words.sumOf { word -> Regex.escape(word).toRegex().findAll(text).count() }
+        }
+        return scores.maxByOrNull { it.value }?.takeIf { it.value > 0 }?.key
+    }
+
     private var current = Scene.NONE
     private var changedAt = 0L
 

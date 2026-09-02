@@ -87,25 +87,14 @@ class HttpReadAloudService : BaseReadAloudService(),
             .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
             .build()
 
-    /** 有声剧背景播放器，与主语音播放器独立混音 */
+    /** 有声剧音效播放器：只播放按正文触发的短音效，不再循环嗡嗡底噪 */
     private val backgroundPlayer: ExoPlayer by lazy {
         ExoPlayer.Builder(this).build().apply {
-            repeatMode = Player.REPEAT_MODE_ONE
-            // 背景音同样需要唤醒锁，且不参与音频焦点竞争
+            repeatMode = Player.REPEAT_MODE_OFF
             setWakeMode(C.WAKE_MODE_LOCAL)
             addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_READY && !backgroundStartNotified) {
-                        backgroundStartNotified = true
-                        toastOnUi("背景音已启动：${backgroundScene.name}")
-                    }
-                }
-
                 override fun onPlayerError(error: PlaybackException) {
-                    val message = "背景音播放失败: ${error.localizedMessage}"
-                    AppLog.put(message, error)
-                    toastOnUi(message)
-                    backgroundScene = StorySceneDetector.Scene.NONE
+                    AppLog.put("情节音效播放失败: ${error.localizedMessage}", error)
                 }
             })
         }
@@ -115,6 +104,8 @@ class HttpReadAloudService : BaseReadAloudService(),
     private var backgroundStartNotified = false
     private var sceneDetector = StorySceneDetector()
     private var backgroundFadeJob: Job? = null
+    private var lastEffectAt = 0L
+    private var lastEffectName = ""
 
     /** 当前实际在播的段落序号，-1 表示本章还没开始播 */
     private var aiPlayingParagraph = -1
@@ -159,7 +150,7 @@ class HttpReadAloudService : BaseReadAloudService(),
         backgroundPlayer.setAudioAttributes(
             androidx.media3.common.AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                .setContentType(C.AUDIO_CONTENT_TYPE_SONIFICATION)
                 .build(),
             false
         )
@@ -723,6 +714,8 @@ class HttpReadAloudService : BaseReadAloudService(),
         backgroundScene = StorySceneDetector.Scene.NONE
         backgroundChangedAt = 0L
         backgroundStartNotified = false
+        lastEffectAt = 0L
+        lastEffectName = ""
     }
 
     override fun onTimelineChanged(timeline: Timeline, reason: Int) {
@@ -747,9 +740,16 @@ class HttpReadAloudService : BaseReadAloudService(),
             val scene = parts.getOrNull(3)?.let {
                 runCatching { StorySceneDetector.Scene.valueOf(it) }.getOrNull()
             }
+            val effect = parts.getOrNull(4)?.let {
+                runCatching { StorySceneDetector.Effect.valueOf(it) }.getOrNull()
+            }
             val httpTts = ReadAloud.httpTTS
-            if (httpTts?.audioDramaEnabled == true && scene != null && scene != StorySceneDetector.Scene.NONE) {
-                updateBackgroundScene(scene, httpTts)
+            if (httpTts?.audioDramaEnabled == true) {
+                if (effect != null) {
+                    playSceneEffect(effect, httpTts)
+                } else if (scene != null && scene != StorySceneDetector.Scene.NONE) {
+                    playSceneEffect(scene, httpTts)
+                }
             }
             val paragraph = parts.getOrNull(1)?.toIntOrNull()
             // 首个媒体项以PLAYLIST_CHANGED进入，只启动背景，不推进正文。
@@ -839,12 +839,14 @@ class HttpReadAloudService : BaseReadAloudService(),
                         if (speakText.isEmpty()) return@forEachIndexed
 
                         val sceneName = if (httpTts.audioDramaEnabled) {
-                            // 无明显情节关键词时使用宁静底乐，确保开启有声剧后始终能听到背景
-                            sceneDetector.classify(speakText)
-                                .takeIf { it != StorySceneDetector.Scene.NONE }
-                                ?.name ?: StorySceneDetector.Scene.PEACEFUL.name
+                            sceneDetector.classify(speakText).name
                         } else {
                             StorySceneDetector.Scene.NONE.name
+                        }
+                        val effectName = if (httpTts.audioDramaEnabled) {
+                            sceneDetector.detectEffect(speakText)?.name ?: "NONE"
+                        } else {
+                            "NONE"
                         }
 
                         val roleSegments = if (httpTts.multiRoleEnabled) {
@@ -861,6 +863,7 @@ class HttpReadAloudService : BaseReadAloudService(),
                             }
                         }
 
+                        val paragraphItems = mutableListOf<MediaItem>()
                         roleSegments.forEachIndexed roleLoop@{ roleIndex, seg ->
                             ensureActive()
                             val fileName = md5SpeakFileName(
@@ -913,26 +916,30 @@ class HttpReadAloudService : BaseReadAloudService(),
 
                             val isFirstRole = roleIndex == 0
                             val mediaId =
-                                "ai-role:$paragraphIndex:${if (isFirstRole) "first" else "next"}:$sceneName"
+                                "ai-role:$paragraphIndex:${if (isFirstRole) "first" else "next"}:$sceneName:$effectName"
                             val mediaItem = MediaItem.Builder()
                                 .setMediaId(mediaId)
                                 .setUri(Uri.fromFile(getSpeakFileAsMd5(fileName)))
                                 .build()
+                            paragraphItems += mediaItem
+                        }
+
+                        if (paragraphItems.isNotEmpty()) {
                             launch(Main) {
                                 val stalled = aiPlaybackStarted &&
                                     (exoPlayer.playbackState == Player.STATE_ENDED ||
                                         exoPlayer.playbackState == Player.STATE_IDLE)
-                                exoPlayer.addMediaItem(mediaItem)
-                                // 第一小句生成完立即开播，不等待全段或整页合成。
-                                if (!aiPlaybackStarted) {
+                                exoPlayer.addMediaItems(paragraphItems)
+                                // 先缓存至少两段再开播，避免旁白/角色切换时播放追上合成，
+                                // 出现一句一停、转换处频繁暂停。
+                                val enoughStartupBuffer = paragraphIndex >= startParagraph + 1 ||
+                                    paragraphIndex == contentList.lastIndex
+                                if (!aiPlaybackStarted && enoughStartupBuffer) {
                                     aiPlaybackStarted = true
                                     exoPlayer.prepare()
                                     exoPlayer.playWhenReady = true
                                 } else if (stalled) {
-                                    // 播放已追上合成进度而空转结束（或错误后被清空），
-                                    // 必须跳到新加入的片段重新拉起，否则本章剩余内容不会播，
-                                    // 表现为"只播一章就停"。
-                                    exoPlayer.seekTo(exoPlayer.mediaItemCount - 1, 0L)
+                                    exoPlayer.seekTo(exoPlayer.mediaItemCount - paragraphItems.size, 0L)
                                     exoPlayer.prepare()
                                     exoPlayer.playWhenReady = true
                                 }
@@ -968,56 +975,51 @@ class HttpReadAloudService : BaseReadAloudService(),
     }
 
     private fun sceneAudioFile(assetName: String): File {
-        val dir = File(cacheDir, "audio_scene_v2").apply { mkdirs() }
+        val dir = File(cacheDir, "audio_effect_v1").apply { mkdirs() }
         val target = File(dir, assetName)
         if (!target.exists() || target.length() < 1024L) {
-            assets.open("audio_scene/$assetName").use { input ->
+            assets.open("audio_effect/$assetName").use { input ->
                 target.outputStream().use { output -> input.copyTo(output) }
             }
         }
         return target
     }
 
-    /** 切换到实际正在播放段落的场景，独立播放器循环并平滑淡入。 */
-    private fun updateBackgroundScene(scene: StorySceneDetector.Scene, httpTts: HttpTTS) {
-        if (scene == StorySceneDetector.Scene.NONE || scene == backgroundScene) return
-        val now = System.currentTimeMillis()
-        val holdMs = httpTts.sceneHoldSeconds.coerceIn(10, 300) * 1000L
-        if (backgroundScene != StorySceneDetector.Scene.NONE && now - backgroundChangedAt < holdMs) return
-        backgroundScene = scene
-        backgroundChangedAt = now
-        val file = when (scene) {
-            StorySceneDetector.Scene.RAIN -> "rain.mp3"
-            StorySceneDetector.Scene.FOREST -> "forest.mp3"
-            StorySceneDetector.Scene.BATTLE -> "battle.mp3"
-            StorySceneDetector.Scene.SUSPENSE -> "suspense.mp3"
-            StorySceneDetector.Scene.ROMANCE -> "romance.mp3"
-            StorySceneDetector.Scene.SAD -> "sad.mp3"
-            StorySceneDetector.Scene.PEACEFUL -> "peaceful.mp3"
+    private fun playSceneEffect(scene: StorySceneDetector.Scene, httpTts: HttpTTS) {
+        val effect = when (scene) {
+            StorySceneDetector.Scene.RAIN -> StorySceneDetector.Effect.RAIN
+            StorySceneDetector.Scene.BATTLE -> StorySceneDetector.Effect.SWORD
+            StorySceneDetector.Scene.SUSPENSE -> StorySceneDetector.Effect.FOOTSTEP
+            StorySceneDetector.Scene.FOREST,
+            StorySceneDetector.Scene.ROMANCE,
+            StorySceneDetector.Scene.SAD,
+            StorySceneDetector.Scene.PEACEFUL,
             StorySceneDetector.Scene.NONE -> return
         }
+        playSceneEffect(effect, httpTts)
+    }
+
+    /**
+     * 按正文触发短音效，不再循环背景底乐。
+     * 例如“关门砰的一声”播放 door_slam，“狂风暴雨”播放 wind/rain。
+     */
+    private fun playSceneEffect(effect: StorySceneDetector.Effect, httpTts: HttpTTS) {
+        val now = System.currentTimeMillis()
+        if (lastEffectName == effect.name && now - lastEffectAt < 4_000L) return
+        lastEffectName = effect.name
+        lastEffectAt = now
         lifecycleScope.launch {
             runCatching {
-                // 先从assets复制到应用缓存，再用file Uri播放，兼容所有Media3 DataSource实现
-                val audioFile = sceneAudioFile(file)
+                val audioFile = sceneAudioFile(effect.assetName)
                 backgroundFadeJob?.cancel()
+                backgroundPlayer.stop()
+                backgroundPlayer.clearMediaItems()
                 backgroundPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(audioFile)))
-                backgroundPlayer.volume = 0f
+                backgroundPlayer.volume = httpTts.backgroundVolume.coerceIn(0, 100) / 100f
                 backgroundPlayer.prepare()
                 backgroundPlayer.playWhenReady = true
-                // 背景音量完全按用户设定播放，不做对白打折，确保能实际听到
-                val target = httpTts.backgroundVolume.coerceIn(0, 100) / 100f
-                backgroundFadeJob = lifecycleScope.launch {
-                    repeat(12) { step ->
-                        backgroundPlayer.volume = target * (step + 1) / 12f
-                        delay(100)
-                    }
-                }
             }.onFailure {
-                val message = "背景音加载失败: ${it.localizedMessage}"
-                AppLog.put(message, it)
-                toastOnUi(message)
-                backgroundScene = StorySceneDetector.Scene.NONE
+                AppLog.put("情节音效加载失败: ${it.localizedMessage}", it)
             }
         }
     }
