@@ -106,6 +106,14 @@ class HttpReadAloudService : BaseReadAloudService(),
     private var backgroundFadeJob: Job? = null
     private var lastEffectAt = 0L
     private var lastEffectName = ""
+    /** 本次朗读是否已提示过生效的音色配置 */
+    private var aiConfigNotified = false
+
+    /** 音色ID转成人能看懂的名字，用于提示实际生效的音色 */
+    private fun voiceLabel(voiceId: String): String =
+        AiTtsEngineFactory.getVoices(io.legado.app.help.tts.AiTtsEngine.TYPE_EDGE)
+            .firstOrNull { it.id == voiceId }?.name
+            ?: voiceId.removePrefix("zh-CN-").removeSuffix("Neural")
 
     /** 当前实际在播的段落序号，-1 表示本章还没开始播 */
     private var aiPlayingParagraph = -1
@@ -812,6 +820,7 @@ class HttpReadAloudService : BaseReadAloudService(),
     private fun downloadAndPlayAudiosAi() {
         exoPlayer.clearMediaItems()
         downloadTask?.cancel()
+        aiConfigNotified = false
         aiRoleMode = true
         aiSynthesisDone = false
         aiPlaybackStarted = false
@@ -823,10 +832,21 @@ class HttpReadAloudService : BaseReadAloudService(),
                 val httpTts = ReadAloud.httpTTS ?: throw NoStackTraceException("tts is null")
                 val engine = AiTtsEngineFactory.create(httpTts)
                 val speed = (AppConfig.speechRatePlay + 5) / 10.0f
+                val narratorVoiceName = httpTts.narratorVoice ?: "zh-CN-YunyangNeural"
                 val narrator = MultiRoleNarrator(
-                    narratorVoice = httpTts.narratorVoice ?: "zh-CN-YunyangNeural",
+                    narratorVoice = narratorVoiceName,
                     defaultVoice = httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural"
                 )
+                // 明确回报实际生效的配置：用户反馈"旁白换不了"时可直接确认
+                // 究竟是设置没保存、还是保存了但播放读到旧值。
+                val configSummary = "旁白:${voiceLabel(narratorVoiceName)} " +
+                    "主音色:${voiceLabel(httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural")} " +
+                    "多角色:${if (httpTts.multiRoleEnabled) "开" else "关"}"
+                AppLog.put("AI朗读配置 $configSummary")
+                if (!aiConfigNotified) {
+                    aiConfigNotified = true
+                    toastOnUi(configSummary)
+                }
                 // nowSpeak 会随播放推进而增长，必须在开始合成前快照，
                 // 否则播放追上合成时后续段落会被 paragraphIndex < nowSpeak 误判跳过。
                 val startParagraph = nowSpeak

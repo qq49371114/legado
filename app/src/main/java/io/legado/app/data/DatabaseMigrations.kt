@@ -21,7 +21,7 @@ object DatabaseMigrations {
             migration_35_36, migration_36_37, migration_37_38, migration_38_39,
             migration_39_40, migration_40_41, migration_41_42, migration_42_43,
             MIGRATION_71_72, MIGRATION_72_73, MIGRATION_73_74, MIGRATION_74_75,
-            MIGRATION_75_76, MIGRATION_76_77
+            MIGRATION_75_76, MIGRATION_76_77, MIGRATION_77_78
         )
     }
 
@@ -459,6 +459,38 @@ object DatabaseMigrations {
         override fun migrate(db: SupportSQLiteDatabase) {
             // 旧版默认12%且素材响度低，升级到标准化素材后自动调整到可听的25%
             db.execSQL("UPDATE httpTTS SET backgroundVolume = 25 WHERE backgroundVolume <= 12")
+        }
+    }
+
+    @Suppress("ClassName")
+    val MIGRATION_77_78 = object : Migration(77, 78) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // 微软已下架大量 Edge 音色，库里存着下架ID时合成会静默失败并回退到主音色，
+            // 表现为"旁白音色怎么选都不变"。把所有已下架音色批量映射到实测可用音色。
+            val replacements = mapOf(
+                "zh-CN-YunfengNeural" to "zh-CN-YunjianNeural",
+                "zh-CN-YunhaoNeural" to "zh-CN-YunyangNeural",
+                "zh-CN-YunyeNeural" to "zh-CN-YunxiNeural",
+                "zh-CN-XiaochenNeural" to "zh-CN-XiaoxiaoNeural",
+                "zh-CN-XiaohanNeural" to "zh-CN-XiaoxuanNeural",
+                "zh-CN-XiaomengNeural" to "zh-CN-XiaoyiNeural",
+                "zh-CN-XiaomoNeural" to "zh-CN-XiaoxuanNeural",
+                "zh-CN-XiaoqiuNeural" to "zh-CN-XiaoxuanNeural",
+                "zh-CN-XiaoruiNeural" to "zh-CN-XiaoxuanNeural",
+                "zh-CN-XiaoshuangNeural" to "zh-CN-XiaoyiNeural",
+                "zh-CN-XiaoyanNeural" to "zh-CN-XiaoxiaoNeural",
+                "zh-CN-XiaozhenNeural" to "zh-CN-XiaoxiaoNeural"
+            )
+            replacements.forEach { (dead, alive) ->
+                db.execSQL(
+                    "UPDATE httpTTS SET voiceName = ? WHERE voiceName = ?",
+                    arrayOf(alive, dead)
+                )
+                db.execSQL(
+                    "UPDATE httpTTS SET narratorVoice = ? WHERE narratorVoice = ?",
+                    arrayOf(alive, dead)
+                )
+            }
         }
     }
 

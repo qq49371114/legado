@@ -39,30 +39,35 @@ object AiTtsEngineFactory {
 
     /**
      * 修复预设AI引擎：即使旧版本已把隐藏字段保存坏，也能按固定ID恢复。
-     * 返回可直接写回数据库的完整对象。
+     *
+     * 只补齐缺失/损坏的字段，绝不覆盖用户已设置的音色。
+     * 旧版无条件把 voiceName 改回出厂值并写回数据库，导致用户改了主音色
+     * 一播放就被还原，表现为"音色怎么选都不变"。
      */
     fun normalizePreset(httpTTS: HttpTTS): HttpTTS {
-        val edgeVoice = when (httpTTS.id) {
+        val factoryVoice = when (httpTTS.id) {
             -200L -> "zh-CN-XiaoxiaoNeural"
             -201L -> "zh-CN-YunjianNeural"
             -202L -> "zh-CN-XiaoyiNeural"
             -203L -> "zh-CN-YunxiNeural"
             -204L -> "zh-CN-YunyangNeural"
-            -205L -> "zh-CN-XiaohanNeural"
+            -205L -> "zh-CN-XiaoxuanNeural"
             else -> null
-        }
-        return if (edgeVoice != null) {
-            httpTTS.copy(
-                engineType = AiTtsEngine.TYPE_EDGE,
-                voiceName = edgeVoice,
-                apiFormat = "audio-24khz-48kbitrate-mono-mp3",
-                streamMode = false,
-                ssmlSupport = true,
-                maxCharLimit = 5000
-            )
-        } else {
-            httpTTS
-        }
+        } ?: return httpTTS
+        val available = getVoices(AiTtsEngine.TYPE_EDGE).map { it.id }
+        // 用户自己选的音色只要仍在可用列表里就保留；为空或已下架才回落出厂音色
+        val voice = httpTTS.voiceName?.takeIf { it in available } ?: factoryVoice
+        // 旁白音色同理：可用就保留，已下架/为空才换成可用的默认男声旁白
+        val narrator = httpTTS.narratorVoice?.takeIf { it in available } ?: "zh-CN-YunyangNeural"
+        return httpTTS.copy(
+            engineType = AiTtsEngine.TYPE_EDGE,
+            voiceName = voice,
+            narratorVoice = narrator,
+            apiFormat = "audio-24khz-48kbitrate-mono-mp3",
+            streamMode = false,
+            ssmlSupport = true,
+            maxCharLimit = 5000
+        )
     }
 
     fun create(httpTTS: HttpTTS): AiTtsEngine {
