@@ -60,7 +60,9 @@ by appCtx.getSharedPreferences("local", Context.MODE_PRIVATE) {
         get() = isLastVersion(1, "ruleHelpVersion")
 
     val needUpHttpTTS: Boolean
-        get() = !isLastVersion(7, "httpTtsVersion")
+        // 8: 2026-09-03 新增 5 个 StepAudio 2.5 预设（-240~-244），
+        // 版本号不升的话老用户永远看不到新引擎预设
+        get() = !isLastVersion(8, "httpTtsVersion")
 
     val needUpTxtTocRule: Boolean
         get() = !isLastVersion(3, "txtTocRuleVersion")

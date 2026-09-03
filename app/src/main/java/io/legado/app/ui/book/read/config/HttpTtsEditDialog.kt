@@ -92,8 +92,10 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
         binding.swDuckBackground.isChecked = httpTTS.duckBackground
         binding.tvBackgroundVolume.setText(httpTTS.backgroundVolume.toString())
         binding.tvSceneHoldSeconds.setText(httpTTS.sceneHoldSeconds.toString())
-        binding.tvNarratorVoice.setText(httpTTS.narratorVoice ?: "zh-CN-YunyangNeural")
-        initVoicePickers()
+        binding.tvNarratorVoice.setText(
+            httpTTS.narratorVoice ?: defaultNarratorFor(httpTTS.engineType)
+        )
+        initVoicePickers(httpTTS.engineType)
         binding.tvConcurrentRate.setText(httpTTS.concurrentRate)
         binding.tvLoginUrl.setText(httpTTS.loginUrl)
         binding.tvLoginUi.setText(httpTTS.loginUi)
@@ -101,14 +103,27 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
         binding.tvHeaders.setText(httpTTS.header)
     }
 
+    private fun defaultNarratorFor(engineType: String): String =
+        if (engineType == AiTtsEngine.TYPE_STEPAUDIO) "boyinnansheng" else "zh-CN-YunyangNeural"
+
     /**
      * 音色改为点击弹窗选择。
      * 手填音色ID极易敲错，且微软已下架大量音色，敲错后合成会静默回退到主音色，
      * 表现为"旁白音色切换没反应"。这里只展示实测可用的音色。
+     *
+     * 音色列表按引擎取：Edge 和 StepAudio 的 ID 体系完全不同（zh-CN-XxxNeural
+     * vs cixingnansheng），给 StepAudio 预设弹一列 Edge 音色只会让用户选出
+     * 一个必然合成失败的 ID。引擎类型改了要重新初始化列表。
      */
-    private fun initVoicePickers() {
-        val voices = AiTtsEngineFactory.getVoices(AiTtsEngine.TYPE_EDGE)
-        if (voices.isEmpty()) return
+    private fun initVoicePickers(engineType: String) {
+        val type = engineType.ifBlank { AiTtsEngine.TYPE_EDGE }
+        val voices = AiTtsEngineFactory.getVoices(type)
+        if (voices.isEmpty()) {
+            // 该引擎没有预设音色表（如 http/cosyvoice），保持手填，清掉旧的点击监听
+            binding.tvVoiceName.setOnClickListener(null)
+            binding.tvNarratorVoice.setOnClickListener(null)
+            return
+        }
         val labels = voices.map { "${it.name}  ·  ${it.id}" }
         binding.tvVoiceName.setOnClickListener {
             context?.selector("选择主音色（角色默认声音）", labels) { _, i ->
@@ -118,6 +133,13 @@ class HttpTtsEditDialog() : BaseDialogFragment(R.layout.dialog_http_tts_edit, tr
         binding.tvNarratorVoice.setOnClickListener {
             context?.selector("选择旁白音色", labels) { _, i ->
                 binding.tvNarratorVoice.setText(voices[i].id)
+            }
+        }
+        // 引擎类型输入框改了之后，音色列表要跟着换
+        binding.tvEngineType.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                val current = binding.tvEngineType.text?.toString()?.trim().orEmpty()
+                if (current.isNotBlank() && current != type) initVoicePickers(current)
             }
         }
     }

@@ -33,9 +33,11 @@ import io.legado.app.help.config.AppConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.exoplayer.InputStreamDataSource
 import io.legado.app.help.http.okHttpClient
+import io.legado.app.help.tts.AiTtsEngine
 import io.legado.app.help.tts.AiTtsEngineFactory
 import io.legado.app.help.tts.MultiRoleNarrator
 import io.legado.app.help.tts.SmartSegmenter
+import io.legado.app.help.tts.StepAudioTtsEngine
 import io.legado.app.help.tts.StorySceneDetector
 import io.legado.app.model.ReadAloud
 import io.legado.app.model.ReadBook
@@ -109,11 +111,26 @@ class HttpReadAloudService : BaseReadAloudService(),
     /** 本次朗读是否已提示过生效的音色配置 */
     private var aiConfigNotified = false
 
-    /** 音色ID转成人能看懂的名字，用于提示实际生效的音色 */
-    private fun voiceLabel(voiceId: String): String =
-        AiTtsEngineFactory.getVoices(io.legado.app.help.tts.AiTtsEngine.TYPE_EDGE)
-            .firstOrNull { it.id == voiceId }?.name
-            ?: voiceId.removePrefix("zh-CN-").removeSuffix("Neural")
+    /**
+     * 音色ID转成人能看懂的名字，用于提示实际生效的音色。
+     * 必须按当前引擎查表：StepAudio 的音色 ID 是 cixingnansheng 这种拼音，
+     * 只查 Edge 表会全部落到兜底分支，toast 里显示一串看不懂的拼音。
+     */
+    private fun voiceLabel(voiceId: String): String {
+        val engineType = ReadAloud.httpTTS
+            ?.let { AiTtsEngineFactory.normalizePreset(it).engineType }
+            ?.ifBlank { AiTtsEngine.TYPE_EDGE }
+            ?: AiTtsEngine.TYPE_EDGE
+        AiTtsEngineFactory.getVoices(engineType)
+            .firstOrNull { it.id == voiceId }?.name?.let { return it }
+        // 引擎判断失败时兜底全表扫一遍，别让用户看到裸 ID
+        listOf(AiTtsEngine.TYPE_EDGE, AiTtsEngine.TYPE_STEPAUDIO, AiTtsEngine.TYPE_OPENAI)
+            .forEach { type ->
+                AiTtsEngineFactory.getVoices(type)
+                    .firstOrNull { it.id == voiceId }?.name?.let { return it }
+            }
+        return voiceId.removePrefix("zh-CN-").removeSuffix("Neural")
+    }
 
     /** 当前实际在播的段落序号，-1 表示本章还没开始播 */
     private var aiPlayingParagraph = -1
@@ -832,20 +849,36 @@ class HttpReadAloudService : BaseReadAloudService(),
                 val httpTts = ReadAloud.httpTTS ?: throw NoStackTraceException("tts is null")
                 val engine = AiTtsEngineFactory.create(httpTts)
                 val speed = (AppConfig.speechRatePlay + 5) / 10.0f
-                val narratorVoiceName = httpTts.narratorVoice ?: "zh-CN-YunyangNeural"
+                // 引擎类型决定音色 ID 体系与默认音色，不能再写死 Edge 那套
+                val engineType = engine.engineType
+                val isStep = engineType == AiTtsEngine.TYPE_STEPAUDIO
+                val defaultVoiceName = if (isStep) {
+                    StepAudioTtsEngine.DEFAULT_VOICE
+                } else {
+                    "zh-CN-XiaoxiaoNeural"
+                }
+                val defaultNarrator = if (isStep) {
+                    StepAudioTtsEngine.DEFAULT_NARRATOR
+                } else {
+                    "zh-CN-YunyangNeural"
+                }
+                val narratorVoiceName = httpTts.narratorVoice ?: defaultNarrator
                 // 角色档案按书持久化：书名+作者做键，换书自动隔离，同书跨章保持同一音色。
                 // 旧版没传 bookKey，每章 new 出来的 Narrator 档案全空，
                 // 同一个角色每章重新投一次音色 —— 这就是"角色声音一直在轮换"。
-                val bookKey = ReadBook.book?.let { "${it.name}|${it.author}" } ?: "unknown-book"
+                // bookKey 里带上引擎类型：换引擎后音色 ID 体系变了，旧档案必须失效。
+                val bookKey = (ReadBook.book?.let { "${it.name}|${it.author}" } ?: "unknown-book") +
+                    "|$engineType"
                 val narrator = MultiRoleNarrator(
                     narratorVoice = narratorVoiceName,
-                    defaultVoice = httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
-                    bookKey = bookKey
+                    defaultVoice = httpTts.voiceName ?: defaultVoiceName,
+                    bookKey = bookKey,
+                    engineType = engineType
                 )
                 // 明确回报实际生效的配置：用户反馈"旁白换不了"时可直接确认
                 // 究竟是设置没保存、还是保存了但播放读到旧值。
                 val configSummary = "旁白:${voiceLabel(narratorVoiceName)} " +
-                    "主音色:${voiceLabel(httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural")} " +
+                    "主音色:${voiceLabel(httpTts.voiceName ?: defaultVoiceName)} " +
                     "多角色:${if (httpTts.multiRoleEnabled) "开" else "关"}"
                 AppLog.put("AI朗读配置 $configSummary")
                 if (!aiConfigNotified) {
@@ -882,24 +915,30 @@ class HttpReadAloudService : BaseReadAloudService(),
                                 httpTts.maxCharLimit.takeIf { it > 0 } ?: 5000
                             ).map {
                                 MultiRoleNarrator.RoleSegment(
-                                    it, "默认", httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
+                                    it, "默认", httpTts.voiceName ?: defaultVoiceName,
                                     SmartSegmenter.detectEmotion(it), false
                                 )
                             }
                         }
 
-                        // 情绪子句再切：Edge 免费端点实测拒绝 mstts:express-as / break /
-                        // emphasis，且一条 SSML 里超过 2 个 prosody 直接报 SSML is invalid，
-                        // 所以句内起伏只能靠"每个情绪子句发一次独立请求"实现。
-                        // 实测三个子句独立合成的基频分别是 328/178/126 Hz，差异非常明显；
-                        // 而写在一条 SSML 里是做不到的。
-                        val roleSegments = baseSegments.flatMap { seg ->
-                            val clauses = SmartSegmenter.emotionClauses(seg.text)
-                            if (clauses.size <= 1) {
-                                listOf(seg)
-                            } else {
-                                clauses.map { clause ->
-                                    seg.copy(text = clause.text, emotion = clause.emotion)
+                        // 情绪子句再切：仅对不支持自然语言情感指令的引擎（如 Edge）需要。
+                        // Edge 免费端点实测拒绝 mstts:express-as / break / emphasis，且一条
+                        // SSML 里超过 2 个 prosody 直接报 SSML is invalid，所以句内起伏只能靠
+                        // "每个情绪子句发一次独立请求"实现（实测三子句基频 328/178/126 Hz）。
+                        //
+                        // StepAudio 不切：它自己就能在一次请求里做句内表演，而且按字符计费，
+                        // 拆成多次请求只会多花钱、还破坏它的整句韵律连贯性。
+                        val roleSegments = if (isStep) {
+                            baseSegments
+                        } else {
+                            baseSegments.flatMap { seg ->
+                                val clauses = SmartSegmenter.emotionClauses(seg.text)
+                                if (clauses.size <= 1) {
+                                    listOf(seg)
+                                } else {
+                                    clauses.map { clause ->
+                                        seg.copy(text = clause.text, emotion = clause.emotion)
+                                    }
                                 }
                             }
                         }
@@ -908,16 +947,26 @@ class HttpReadAloudService : BaseReadAloudService(),
                         roleSegments.forEachIndexed roleLoop@{ roleIndex, seg ->
                             ensureActive()
                             val fileName = md5SpeakFileName(
-                                "role-v4|${seg.speaker}|${seg.voice}|${seg.emotion}|${seg.text}"
+                                "role-v5|${seg.speaker}|${seg.voice}|${seg.emotion}|${seg.text}"
                             )
                             if (!hasSpeakFile(fileName)) {
-                                val fallbackVoices = linkedSetOf(
-                                    seg.voice,
-                                    httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
-                                    "zh-CN-YunxiNeural",
-                                    "zh-CN-XiaoyiNeural",
-                                    "zh-CN-XiaoxiaoNeural"
-                                )
+                                // 回退音色必须与当前引擎同体系，混用会让每次回退都白白失败一轮
+                                val fallbackVoices = if (isStep) {
+                                    linkedSetOf(
+                                        seg.voice,
+                                        httpTts.voiceName ?: StepAudioTtsEngine.DEFAULT_VOICE,
+                                        StepAudioTtsEngine.DEFAULT_NARRATOR,
+                                        StepAudioTtsEngine.DEFAULT_VOICE
+                                    )
+                                } else {
+                                    linkedSetOf(
+                                        seg.voice,
+                                        httpTts.voiceName ?: "zh-CN-XiaoxiaoNeural",
+                                        "zh-CN-YunxiNeural",
+                                        "zh-CN-XiaoyiNeural",
+                                        "zh-CN-XiaoxiaoNeural"
+                                    )
+                                }
                                 var bytes: ByteArray? = null
                                 var lastError: Throwable? = null
                                 for (candidateVoice in fallbackVoices) {

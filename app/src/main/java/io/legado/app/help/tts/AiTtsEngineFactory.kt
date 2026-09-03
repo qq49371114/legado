@@ -45,6 +45,28 @@ object AiTtsEngineFactory {
      * 一播放就被还原，表现为"音色怎么选都不变"。
      */
     fun normalizePreset(httpTTS: HttpTTS): HttpTTS {
+        // StepAudio 预设（-240 起；-200~-230 已被 Edge/OpenAI/Azure/CosyVoice 占用）
+        // 音色体系与 Edge 完全不同，必须单独处理，否则会被当成 Edge 预设洗掉音色
+        stepAudioFactoryVoice(httpTTS.id)?.let { factoryVoice ->
+            val available = stepVoices.map { it.id }
+            val voice = httpTTS.voiceName?.takeIf { it in available } ?: factoryVoice
+            val narrator = httpTTS.narratorVoice?.takeIf { it in available }
+                ?: StepAudioTtsEngine.DEFAULT_NARRATOR
+            return httpTTS.copy(
+                engineType = AiTtsEngine.TYPE_STEPAUDIO,
+                voiceModel = httpTTS.voiceModel?.takeIf { it.isNotBlank() }
+                    ?: StepAudioTtsEngine.DEFAULT_MODEL,
+                voiceName = voice,
+                narratorVoice = narrator,
+                apiFormat = httpTTS.apiFormat.takeIf { it in setOf("mp3", "wav", "flac", "opus") }
+                    ?: "mp3",
+                streamMode = false,
+                ssmlSupport = false,
+                // 官方单次输入上限 1000 字符
+                maxCharLimit = 1000
+            )
+        }
+
         val factoryVoice = when (httpTTS.id) {
             -200L -> "zh-CN-XiaoxiaoNeural"
             -201L -> "zh-CN-YunjianNeural"
@@ -70,6 +92,16 @@ object AiTtsEngineFactory {
         )
     }
 
+    /** StepAudio 预设 ID → 出厂音色 */
+    private fun stepAudioFactoryVoice(id: Long): String? = when (id) {
+        -240L -> "linjiajiejie"
+        -241L -> "cixingnansheng"
+        -242L -> "boyinnansheng"
+        -243L -> "qingchunshaonv"
+        -244L -> "zhixingjiejie"
+        else -> null
+    }
+
     fun create(httpTTS: HttpTTS): AiTtsEngine {
         val normalized = normalizePreset(httpTTS)
         val engineType = normalized.engineType.ifBlank { AiTtsEngine.TYPE_HTTP }
@@ -78,6 +110,7 @@ object AiTtsEngineFactory {
             AiTtsEngine.TYPE_OPENAI -> OpenAiTtsEngine(normalized)
             AiTtsEngine.TYPE_AZURE -> AzureTtsEngine(normalized)
             AiTtsEngine.TYPE_COSYVOICE -> CosyVoiceTtsEngine(normalized)
+            AiTtsEngine.TYPE_STEPAUDIO -> StepAudioTtsEngine(normalized)
             else -> EdgeTtsEngine(normalized)
         }
     }
@@ -89,11 +122,14 @@ object AiTtsEngineFactory {
         return type != AiTtsEngine.TYPE_HTTP
     }
 
+    private val stepVoices by lazy { StepAudioTtsEngine.VOICES }
+
     /** 获取引擎预设音色 */
     fun getVoices(engineType: String): List<AiTtsEngine.VoiceInfo> {
         return when (engineType) {
             AiTtsEngine.TYPE_EDGE -> edgeVoices
             AiTtsEngine.TYPE_OPENAI -> openaiVoices
+            AiTtsEngine.TYPE_STEPAUDIO -> stepVoices
             else -> emptyList()
         }
     }

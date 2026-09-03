@@ -56,5 +56,8 @@ interface AiTtsEngine {
         const val TYPE_COSYVOICE = "cosyvoice"
         const val TYPE_ELEVENLABS = "elevenlabs"
         const val TYPE_FISHTTS = "fishtts"
+
+        /** 阶跃星辰 StepAudio 2.5 —— 支持自然语言情感指令，中文表现力最强 */
+        const val TYPE_STEPAUDIO = "stepaudio"
     }
 }

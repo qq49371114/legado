@@ -25,7 +25,13 @@ class MultiRoleNarrator(
     private val narratorVoice: String = "zh-CN-YunyangNeural",
     private val defaultVoice: String = "zh-CN-XiaoxiaoNeural",
     /** 书籍标识：同一本书跨章共享角色档案，换书自动隔离 */
-    private val bookKey: String = ""
+    private val bookKey: String = "",
+    /**
+     * 引擎类型：决定分配给角色的音色池。
+     * 音色 ID 体系每个引擎完全不同（Edge 是 zh-CN-XxxNeural，
+     * StepAudio 是 cixingnansheng 这种拼音），硬编码一套会让另一套全部合成失败。
+     */
+    private val engineType: String = AiTtsEngine.TYPE_EDGE
 ) {
 
     data class RoleSegment(
@@ -39,14 +45,30 @@ class MultiRoleNarrator(
     /** 角色档案：性别 + 已分配音色，按书持久化 */
     private data class RoleProfile(var gender: Gender, var voice: String?)
 
-    // 2026-09-02 逐个 WebSocket 实测可用的音色；已下架音色会返回 Unsupported voice
-    private val maleVoices = listOf(
+    // Edge：2026-09-02 逐个 WebSocket 实测可用（其余已被微软下架）
+    private val edgeMale = listOf(
         "zh-CN-YunjianNeural", "zh-CN-YunxiNeural", "zh-CN-YunyangNeural"
     )
-    private val femaleVoices = listOf(
+    private val edgeFemale = listOf(
         "zh-CN-XiaoyiNeural", "zh-CN-XiaoxuanNeural", "zh-CN-XiaoxiaoNeural"
     )
-    private val childVoices = listOf("zh-CN-YunxiaNeural", "zh-CN-XiaoyiNeural")
+    private val edgeChild = listOf("zh-CN-YunxiaNeural", "zh-CN-XiaoyiNeural")
+
+    // StepAudio：2026-09-03 25 个官方音色逐个实测全部可用，挑音色差异明显的进池
+    private val stepMale = listOf(
+        "cixingnansheng", "shenchennanyin", "qingniandaxuesheng", "wenrounansheng"
+    )
+    private val stepFemale = listOf(
+        "linjiajiejie", "lengyanyujie", "wenrounvsheng", "ganliannvsheng"
+    )
+    private val stepChild = listOf("qingchunshaonv", "ruanmengnvsheng")
+
+    private val maleVoices: List<String>
+        get() = if (engineType == AiTtsEngine.TYPE_STEPAUDIO) stepMale else edgeMale
+    private val femaleVoices: List<String>
+        get() = if (engineType == AiTtsEngine.TYPE_STEPAUDIO) stepFemale else edgeFemale
+    private val childVoices: List<String>
+        get() = if (engineType == AiTtsEngine.TYPE_STEPAUDIO) stepChild else edgeChild
 
     private enum class Gender { MALE, FEMALE, CHILD, UNKNOWN }
 

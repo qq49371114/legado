@@ -80,7 +80,12 @@
     "voiceName": "alloy",
     "apiFormat": "mp3",
     "maxCharLimit": 4096,
-    "loginUi": [{"name": "apiKey", "type": "password"}]
+    "loginUi": [
+      {
+        "name": "apiKey",
+        "type": "password"
+      }
+    ]
   },
   {
     "id": -211,
@@ -91,7 +96,12 @@
     "voiceName": "nova",
     "apiFormat": "mp3",
     "maxCharLimit": 4096,
-    "loginUi": [{"name": "apiKey", "type": "password"}]
+    "loginUi": [
+      {
+        "name": "apiKey",
+        "type": "password"
+      }
+    ]
   },
   {
     "id": -220,
@@ -104,7 +114,16 @@
     "ssmlSupport": true,
     "emotionTags": "[\"cheerful\",\"sad\",\"angry\",\"excited\",\"friendly\"]",
     "speedRange": "0.5-2.0",
-    "loginUi": [{"name": "subscriptionKey", "type": "password"}, {"name": "region", "type": "text"}]
+    "loginUi": [
+      {
+        "name": "subscriptionKey",
+        "type": "password"
+      },
+      {
+        "name": "region",
+        "type": "text"
+      }
+    ]
   },
   {
     "id": -221,
@@ -116,7 +135,16 @@
     "streamMode": true,
     "ssmlSupport": true,
     "speedRange": "0.5-2.0",
-    "loginUi": [{"name": "subscriptionKey", "type": "password"}, {"name": "region", "type": "text"}]
+    "loginUi": [
+      {
+        "name": "subscriptionKey",
+        "type": "password"
+      },
+      {
+        "name": "region",
+        "type": "text"
+      }
+    ]
   },
   {
     "id": -230,
@@ -127,6 +155,116 @@
     "apiFormat": "wav",
     "streamMode": true,
     "maxCharLimit": 500
+  },
+  {
+    "id": -240,
+    "name": "StepAudio 邻家姐姐(女·情感)",
+    "url": "https://api.stepfun.com/v1/audio/speech",
+    "engineType": "stepaudio",
+    "voiceModel": "stepaudio-2.5-tts",
+    "voiceName": "linjiajiejie",
+    "apiFormat": "mp3",
+    "streamMode": false,
+    "ssmlSupport": false,
+    "maxCharLimit": 1000,
+    "emotionTags": "[\"laugh\",\"cry\",\"shout\",\"whisper\",\"angry\",\"sad\",\"excited\",\"cheerful\",\"fearful\",\"friendly\"]",
+    "speedRange": "0.5-2.0",
+    "multiRoleEnabled": true,
+    "narratorVoice": "boyinnansheng",
+    "loginUi": [
+      {
+        "name": "apiKey",
+        "type": "password"
+      }
+    ]
+  },
+  {
+    "id": -241,
+    "name": "StepAudio 磁性男声(男·情感)",
+    "url": "https://api.stepfun.com/v1/audio/speech",
+    "engineType": "stepaudio",
+    "voiceModel": "stepaudio-2.5-tts",
+    "voiceName": "cixingnansheng",
+    "apiFormat": "mp3",
+    "streamMode": false,
+    "ssmlSupport": false,
+    "maxCharLimit": 1000,
+    "emotionTags": "[\"laugh\",\"cry\",\"shout\",\"whisper\",\"angry\",\"sad\",\"excited\",\"cheerful\",\"fearful\",\"friendly\"]",
+    "speedRange": "0.5-2.0",
+    "multiRoleEnabled": true,
+    "narratorVoice": "boyinnansheng",
+    "loginUi": [
+      {
+        "name": "apiKey",
+        "type": "password"
+      }
+    ]
+  },
+  {
+    "id": -242,
+    "name": "StepAudio 播音男声(男·旁白)",
+    "url": "https://api.stepfun.com/v1/audio/speech",
+    "engineType": "stepaudio",
+    "voiceModel": "stepaudio-2.5-tts",
+    "voiceName": "boyinnansheng",
+    "apiFormat": "mp3",
+    "streamMode": false,
+    "ssmlSupport": false,
+    "maxCharLimit": 1000,
+    "emotionTags": "[\"laugh\",\"cry\",\"shout\",\"whisper\",\"angry\",\"sad\",\"excited\",\"cheerful\",\"fearful\",\"friendly\"]",
+    "speedRange": "0.5-2.0",
+    "multiRoleEnabled": true,
+    "narratorVoice": "boyinnansheng",
+    "loginUi": [
+      {
+        "name": "apiKey",
+        "type": "password"
+      }
+    ]
+  },
+  {
+    "id": -243,
+    "name": "StepAudio 青春少女(女·活泼)",
+    "url": "https://api.stepfun.com/v1/audio/speech",
+    "engineType": "stepaudio",
+    "voiceModel": "stepaudio-2.5-tts",
+    "voiceName": "qingchunshaonv",
+    "apiFormat": "mp3",
+    "streamMode": false,
+    "ssmlSupport": false,
+    "maxCharLimit": 1000,
+    "emotionTags": "[\"laugh\",\"cry\",\"shout\",\"whisper\",\"angry\",\"sad\",\"excited\",\"cheerful\",\"fearful\",\"friendly\"]",
+    "speedRange": "0.5-2.0",
+    "multiRoleEnabled": true,
+    "narratorVoice": "boyinnansheng",
+    "loginUi": [
+      {
+        "name": "apiKey",
+        "type": "password"
+      }
+    ]
+  },
+  {
+    "id": -244,
+    "name": "StepAudio 知性姐姐(女·沉稳)",
+    "url": "https://api.stepfun.com/v1/audio/speech",
+    "engineType": "stepaudio",
+    "voiceModel": "stepaudio-2.5-tts",
+    "voiceName": "zhixingjiejie",
+    "apiFormat": "mp3",
+    "streamMode": false,
+    "ssmlSupport": false,
+    "maxCharLimit": 1000,
+    "emotionTags": "[\"laugh\",\"cry\",\"shout\",\"whisper\",\"angry\",\"sad\",\"excited\",\"cheerful\",\"fearful\",\"friendly\"]",
+    "speedRange": "0.5-2.0",
+    "multiRoleEnabled": true,
+    "narratorVoice": "boyinnansheng",
+    "loginUi": [
+      {
+        "name": "apiKey",
+        "type": "password"
+      }
+    ]
   },
   {
     "id": -100,
